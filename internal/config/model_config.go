@@ -186,6 +186,9 @@ type ModelConfig struct {
 
 	// Copy of HealthCheckTimeout from global config
 	HealthCheckTimeout int `yaml:"healthCheckTimeout"`
+
+	// Extensions are compile-time registered components composed per model.
+	Extensions []ExtensionConfig `yaml:"extensions"`
 }
 
 // UnmarshalYAML applies model defaults and checks capacity values before YAML

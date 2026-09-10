@@ -597,6 +597,79 @@
                         "default": false,
                         "description": "Open a new upstream connection for every request instead of reusing idle ones. Works around upstreams that close a connection they advertised as keep-alive, such as llama-server after a streamed response (#1205). When true, timeouts.idleConn has no effect."
                     },
+                    "extensions": {
+                        "type": "array",
+                        "default": [],
+                        "description": "Compile-time registered extensions composed for this model in declaration order.",
+                        "items": {
+                            "type": "object",
+                            "required": [
+                                "name",
+                                "type"
+                            ],
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                "type": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                "enabled": {
+                                    "type": "boolean",
+                                    "default": true
+                                },
+                                "requires": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                    },
+                                    "default": []
+                                },
+                                "failurePolicy": {
+                                    "type": "string",
+                                    "enum": [
+                                        "fail",
+                                        "disable",
+                                        "warn"
+                                    ],
+                                    "default": "fail"
+                                },
+                                "readyTimeout": {
+                                    "oneOf": [
+                                        {
+                                            "type": "string",
+                                            "pattern": "^[-+]?(\\d+(\\.\\d+)?(ns|us|ms|s|m|h))+$"
+                                        },
+                                        {
+                                            "type": "integer",
+                                            "minimum": 0
+                                        }
+                                    ]
+                                },
+                                "stopTimeout": {
+                                    "oneOf": [
+                                        {
+                                            "type": "string",
+                                            "pattern": "^[-+]?(\\d+(\\.\\d+)?(ns|us|ms|s|m|h))+$"
+                                        },
+                                        {
+                                            "type": "integer",
+                                            "minimum": 0
+                                        }
+                                    ]
+                                },
+                                "config": {
+                                    "type": "object",
+                                    "additionalProperties": true,
+                                    "default": {}
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
                     "compat": {
                         "type": "object",
                         "properties": {

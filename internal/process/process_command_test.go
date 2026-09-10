@@ -218,6 +218,132 @@ func TestProcessCommand_StartStop(t *testing.T) {
 	}
 }
 
+func TestProcessCommand_CancelledRequestKeepsBackendReady(t *testing.T) {
+	skipIfNoSimpleResponder(t)
+
+	cmd, port := simpleResponderCmd(t, "-silent")
+	p := newProcessCommand(t, config.ModelConfig{
+		Cmd:                cmd,
+		Proxy:              fmt.Sprintf("http://127.0.0.1:%d", port),
+		CheckEndpoint:      "/health",
+		HealthCheckTimeout: 10,
+	})
+	runErr := runAsync(t, p)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := httptest.NewRequest(http.MethodGet, "/slow-respond?delay=1s", nil).WithContext(ctx)
+		p.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+
+	deadline := time.Now().Add(testReturnTimeout)
+	for p.inflight.Load() != 1 && time.Now().Before(deadline) {
+		time.Sleep(testPollInterval)
+	}
+	if got := p.inflight.Load(); got != 1 {
+		t.Fatalf("inflight=%d want 1", got)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(testReturnTimeout):
+		t.Fatal("cancelled ServeHTTP did not return")
+	}
+
+	if got := p.State(); got != StateReady {
+		t.Fatalf("state=%s want ready after request cancellation", got)
+	}
+	rr := httptest.NewRecorder()
+	p.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/test", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("request after cancellation status=%d want 200", rr.Code)
+	}
+	if err := p.Stop(testStopTimeout); err != nil {
+		t.Fatalf("Stop after cancellation: %v", err)
+	}
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run() after Stop: %v", err)
+		}
+	case <-time.After(testReturnTimeout):
+		t.Fatal("Run() did not return after Stop")
+	}
+}
+
+func TestProcessCommand_CancellationDoesNotInterruptConcurrentRequests(t *testing.T) {
+	skipIfNoSimpleResponder(t)
+
+	cmd, port := simpleResponderCmd(t, "-silent")
+	p := newProcessCommand(t, config.ModelConfig{
+		Cmd:                cmd,
+		Proxy:              fmt.Sprintf("http://127.0.0.1:%d", port),
+		CheckEndpoint:      "/health",
+		HealthCheckTimeout: 10,
+	})
+	runErr := runAsync(t, p)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelledDone := make(chan struct{})
+	go func() {
+		defer close(cancelledDone)
+		req := httptest.NewRequest(http.MethodGet, "/slow-respond?echo=ab&delay=500ms", nil).WithContext(ctx)
+		p.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	keptDone := make(chan struct{})
+	go func() {
+		defer close(keptDone)
+		req := httptest.NewRequest(http.MethodGet, "/slow-respond?echo=ab&delay=500ms", nil)
+		p.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+
+	deadline := time.Now().Add(testReturnTimeout)
+	for p.inflight.Load() != 2 && time.Now().Before(deadline) {
+		time.Sleep(testPollInterval)
+	}
+	if got := p.inflight.Load(); got != 2 {
+		t.Fatalf("inflight=%d want 2", got)
+	}
+	cancel()
+	select {
+	case <-cancelledDone:
+	case <-time.After(testReturnTimeout):
+		t.Fatal("cancelled request did not return")
+	}
+
+	if got := p.State(); got != StateReady {
+		t.Fatalf("state=%s want ready while existing request drains", got)
+	}
+	rr := httptest.NewRecorder()
+	p.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/test", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("new request status=%d want 200 after concurrent cancellation", rr.Code)
+	}
+
+	select {
+	case <-keptDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("existing request was interrupted or did not drain")
+	}
+	if got := p.State(); got != StateReady {
+		t.Fatalf("state=%s want ready after concurrent requests finish", got)
+	}
+	if err := p.Stop(testStopTimeout); err != nil {
+		t.Fatalf("Stop after concurrent requests: %v", err)
+	}
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run() after Stop: %v", err)
+		}
+	case <-time.After(testReturnTimeout):
+		t.Fatal("Run() did not return after Stop")
+	}
+}
+
 func TestProcessCommand_Run_Idempotent(t *testing.T) {
 	skipIfNoSimpleResponder(t)
 

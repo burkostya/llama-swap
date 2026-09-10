@@ -485,6 +485,36 @@ func TestBaseRouter_StartGateClearedAllowsSwap(t *testing.T) {
 	}
 }
 
+func TestBaseRouter_SwapUsesUnloadTimeoutForEviction(t *testing.T) {
+	a := newFakeProcess("a")
+	a.markReady()
+	pb := newFakeProcess("b")
+	pb.autoReady = true
+	conf := config.Config{
+		HealthCheckTimeout: 1200,
+		UnloadTimeout:      10,
+		Models: map[string]config.ModelConfig{
+			"a": {UnloadTimeout: 10},
+			"b": {UnloadTimeout: 10},
+		},
+	}
+	b := newTestBaseWithConfig(t, conf, map[string]process.Process{"a": a, "b": pb}, &stubPlanner{
+		evict: map[string][]string{"b": {"a"}},
+	})
+
+	w := httptest.NewRecorder()
+	b.ServeHTTP(w, newRequest("b"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
+	}
+	if got := a.lastStopTimeout(); got != 10*time.Second {
+		t.Errorf("eviction timeout=%v want 10s", got)
+	}
+	if got := pb.lastEnsureTimeout(); got != 1200*time.Second {
+		t.Errorf("startup timeout=%v want 1200s", got)
+	}
+}
+
 func TestBaseRouter_IgnoreWebsocketsRejectsModelUnlessReady(t *testing.T) {
 	for _, state := range []process.ProcessState{process.StateStopped, process.StateStarting} {
 		t.Run(string(state), func(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/docagent"
 	"github.com/mostlygeek/llama-swap/internal/event"
+	"github.com/mostlygeek/llama-swap/internal/fork/extension"
 	"github.com/mostlygeek/llama-swap/internal/hw"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/mcptools"
@@ -74,8 +75,9 @@ type Server struct {
 	// is shared across the Server instances a hot config reload creates.
 	pause *PauseState
 
-	local router.LocalRouter
-	peer  router.Router
+	local      router.LocalRouter
+	peer       router.Router
+	extensions *extension.Manager
 
 	mux     *http.ServeMux
 	handler http.Handler
@@ -221,34 +223,50 @@ type BuildInfo struct {
 //
 // pause is shared across reloads too, so a reload keeps inference paused; nil
 // starts a fresh, unpaused state.
-func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.Store, build BuildInfo, hardware *hw.HardwareSnapshot, refs *docagent.Docs, code *sourcecode.Provider, pause *PauseState) (*Server, error) {
+func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.Store, build BuildInfo, hardware *hw.HardwareSnapshot, refs *docagent.Docs, code *sourcecode.Provider, pause *PauseState, opts ...Option) (*Server, error) {
+	resolved, err := resolveOptions(opts)
+	if err != nil {
+		return nil, fmt.Errorf("server options: %w", err)
+	}
+
+	// Build all extension chains before routers so an invalid hot-reload config
+	// fails transactionally without replacing the currently running server.
+	extensionManager, routerOpts, err := buildExtensionManager(cfg, resolved, logs.ProxyLogs)
+	if err != nil {
+		return nil, err
+	}
+
 	var local router.LocalRouter
-	var err error
 
 	switch cfg.Routing.Router.Use {
 	case "capacity":
-		local, err = router.NewCapacity(cfg, logs)
+		local, err = router.NewCapacity(cfg, logs, routerOpts...)
 		if err != nil {
+			discardExtensionManager(extensionManager)
 			return nil, fmt.Errorf("creating capacity router: %w", err)
 		}
 	case "matrix":
-		local, err = router.NewMatrix(cfg, logs)
+		local, err = router.NewMatrix(cfg, logs, routerOpts...)
 		if err != nil {
+			discardExtensionManager(extensionManager)
 			return nil, fmt.Errorf("creating matrix router: %w", err)
 		}
 	default: // "group"
-		local, err = router.NewGroup(cfg, logs)
+		local, err = router.NewGroup(cfg, logs, routerOpts...)
 		if err != nil {
+			discardExtensionManager(extensionManager)
 			return nil, fmt.Errorf("creating group router: %w", err)
 		}
 	}
 
 	peer, err := router.NewPeer(cfg, logs.ProxyLogs)
 	if err != nil {
+		discardExtensionManager(extensionManager)
 		return nil, fmt.Errorf("creating peer router: %w", err)
 	}
 
 	if st == nil {
+		discardExtensionManager(extensionManager)
 		return nil, fmt.Errorf("store is required")
 	}
 
@@ -272,6 +290,7 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 		pause:         pause,
 		local:         local,
 		peer:          peer,
+		extensions:    extensionManager,
 		shutdownCtx:   shutdownCtx,
 		shutdownFn:    shutdownFn,
 	}
@@ -290,6 +309,8 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 	}
 	tools, err := mcptools.New(providers...)
 	if err != nil {
+		shutdownFn()
+		discardExtensionManager(extensionManager)
 		return nil, fmt.Errorf("building the MCP tool registry: %w", err)
 	}
 	s.tools = tools
@@ -477,6 +498,12 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/hardware", apiChain.ThenFunc(s.handleAPIHardware))
 	mux.Handle("GET /api/tailcat", apiChain.ThenFunc(s.handleAPITailcat))
 	mux.Handle("GET /api/captures/{id}", apiChain.ThenFunc(s.handleAPICapture))
+	if s.extensions != nil {
+		// Core authenticates and mounts one namespace; each extension owns the
+		// semantics below its model/instance path.
+		mux.Handle("/api/extensions", apiChain.Then(s.extensions.Handler()))
+		mux.Handle("/api/extensions/", apiChain.Then(s.extensions.Handler()))
+	}
 
 	// Stateless MCP server exposing llama-swap's own documentation as tools,
 	// consumed by the Playground's agentic chat and by any external MCP client.
@@ -635,6 +662,7 @@ func (s *Server) Shutdown(timeout time.Duration) error {
 	if s.capcompatCancel != nil {
 		s.capcompatCancel()
 	}
+	deadline := time.Now().Add(timeout)
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -663,5 +691,10 @@ func (s *Server) Shutdown(timeout time.Duration) error {
 	}
 
 	wg.Wait()
+	// Extension state remains live until process stop hooks and request wrappers
+	// are finished; only then may model-lifetime instances be closed.
+	if err := closeExtensionManager(s.extensions, deadline, timeout); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }

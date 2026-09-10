@@ -37,6 +37,9 @@ type baseRouter struct {
 	processes map[string]process.Process
 	logger    *logmon.Monitor
 	schedule  scheduler.Scheduler
+	// processFactory is the sole construction seam used by every local router,
+	// keeping extension wiring out of routing and scheduling behavior.
+	processFactory process.Factory
 
 	// shutdownCtx governs the request machinery: cancelling it tells grant()
 	// and ServeHTTP to stop granting and reject callers. It is deliberately
@@ -81,25 +84,31 @@ func newBaseRouter(
 	processes map[string]process.Process,
 	logger *logmon.Monitor,
 	planner scheduler.Swapper,
+	opts ...Option,
 ) (*baseRouter, error) {
+	resolved, err := resolveOptions(opts)
+	if err != nil {
+		return nil, fmt.Errorf("router options: %w", err)
+	}
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
 	procCtx, procCancel := context.WithCancel(context.Background())
 	b := &baseRouter{
-		name:        name,
-		config:      conf,
-		processes:   processes,
-		logger:      logger,
-		shutdownCtx: shutdownCtx,
-		shutdownFn:  shutdownFn,
-		procCtx:     procCtx,
-		procCancel:  procCancel,
-		handlerCh:   make(chan scheduler.HandlerReq),
-		cancelCh:    make(chan scheduler.HandlerReq),
-		shutdownCh:  make(chan shutdownReq),
-		unloadCh:    make(chan unloadReq),
-		swapDoneCh:  make(chan scheduler.SwapDone),
-		serveDoneCh: make(chan scheduler.ServeDoneEvent),
-		runDone:     make(chan struct{}),
+		name:           name,
+		config:         conf,
+		processes:      processes,
+		logger:         logger,
+		processFactory: resolved.processFactory,
+		shutdownCtx:    shutdownCtx,
+		shutdownFn:     shutdownFn,
+		procCtx:        procCtx,
+		procCancel:     procCancel,
+		handlerCh:      make(chan scheduler.HandlerReq),
+		cancelCh:       make(chan scheduler.HandlerReq),
+		shutdownCh:     make(chan shutdownReq),
+		unloadCh:       make(chan unloadReq),
+		swapDoneCh:     make(chan scheduler.SwapDone),
+		serveDoneCh:    make(chan scheduler.ServeDoneEvent),
+		runDone:        make(chan struct{}),
 	}
 	sched, err := scheduler.New(conf, name, logger, planner, b)
 	if err != nil {
@@ -275,13 +284,12 @@ func (b *baseRouter) trackedServe(modelID string, p process.Process) http.Handle
 
 func (b *baseRouter) doSwap(ctx context.Context, modelID string, generation uint64, toStop []string) {
 	timeout := b.healthCheckTimeout()
-
 	var wg sync.WaitGroup
 	for _, mID := range toStop {
 		wg.Add(1)
 		go func(p process.Process, id string) {
 			defer wg.Done()
-			if err := p.Stop(timeout); err != nil {
+			if err := p.Stop(b.unloadTimeout(id)); err != nil {
 				b.logger.Warnf("%s: stopping %s failed: %v", b.name, id, err)
 			}
 		}(b.processes[mID], mID)
