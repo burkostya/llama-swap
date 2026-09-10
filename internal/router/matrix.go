@@ -15,7 +15,7 @@ type Matrix struct {
 	*baseRouter
 }
 
-func NewMatrix(conf config.Config, logs *logmon.Group) (*Matrix, error) {
+func NewMatrix(conf config.Config, logs *logmon.Group, opts ...Option) (*Matrix, error) {
 	mtx := conf.Routing.Router.Settings.Matrix
 	if mtx == nil {
 		return nil, fmt.Errorf("matrix router requires a matrix configuration")
@@ -43,14 +43,14 @@ func NewMatrix(conf config.Config, logs *logmon.Group) (*Matrix, error) {
 	// Build a process for every model in the config. Any model can run alone
 	// even if it is not part of a set; this mirrors proxy.NewMatrix.
 	processes := make(map[string]process.Process, len(conf.Models))
-	base, err := newBaseRouter("matrix", conf, processes, logs.ProxyLogs, swapper)
+	base, err := newBaseRouter("matrix", conf, processes, logs.ProxyLogs, swapper, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("creating base router: %w", err)
 	}
 
 	for mid, modelCfg := range conf.Models {
 		procLog := logmon.NewWriter(logs.UpstreamLogs)
-		p, err := process.New(base.procCtx, mid, modelCfg, procLog, logs.ProxyLogs)
+		p, err := base.processFactory.New(base.procCtx, mid, modelCfg, procLog, logs.ProxyLogs)
 		if err != nil {
 			base.shutdownFn()
 			base.procCancel()
