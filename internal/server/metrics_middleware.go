@@ -54,6 +54,7 @@ func CreateMetricsMiddleware(mm *metricsMonitor, cfg config.Config) chain.Middle
 				swaputil.SendError(w, r, swaputil.ErrNoModelInContext)
 				return
 			}
+			sessionID := activitySessionID(r.Header, cfg.UI.Activity.SessionID)
 
 			// Buffer the request body/headers for capture before dispatch
 			// consumes them.
@@ -95,12 +96,23 @@ func CreateMetricsMiddleware(mm *metricsMonitor, cfg config.Config) chain.Middle
 			// filed as a successful (empty-body) metric. See #1029.
 			swaputil.MarkClientClosed(recorder, r)
 			if websocket && recorder.Status() == http.StatusSwitchingProtocols {
-				mm.recordRealtime(data.ModelID, task, r, recorder)
+				mm.recordRealtime(data.ModelID, task, r, recorder, sessionID)
 				return
 			}
 			// A refused upgrade (model failed to start, upstream error) is an
 			// ordinary failed request.
-			mm.record(data.ModelID, task, r, recorder, cf, reqBody, reqHeaders)
+			mm.record(data.ModelID, task, r, recorder, cf, reqBody, reqHeaders, sessionID)
 		})
 	}
+}
+
+// activitySessionID returns the first non-empty configured request header.
+// http.Header.Get performs case-insensitive lookup, matching the in-flight UI.
+func activitySessionID(headers http.Header, names []string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(headers.Get(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }

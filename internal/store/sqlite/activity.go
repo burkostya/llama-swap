@@ -31,6 +31,7 @@ var activitySortColumns = map[string]string{
 	"req_path":          "req_path",
 	"resp_status_code":  "resp_status_code",
 	"resp_content_type": "resp_content_type",
+	"session_id":        "session_id",
 	"cached":            "cache_tokens",
 	"prompt":            "input_tokens",
 	"generated":         "output_tokens",
@@ -54,8 +55,8 @@ func (r *activityRepository) Insert(ctx context.Context, entry store.ActivityLog
 			ts_created, src, model_id, req_path, resp_content_type, resp_status_code,
 			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
 			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json,
-			task, route, peer_id, reasoning_tokens, capture_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			task, route, peer_id, reasoning_tokens, capture_id, session_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp.Unix(),
 		entry.Src,
 		entry.Model,
@@ -77,6 +78,7 @@ func (r *activityRepository) Insert(ctx context.Context, entry store.ActivityLog
 		entry.PeerID,
 		entry.Tokens.ReasoningTokens,
 		entry.CaptureID,
+		entry.SessionID,
 	)
 	if err != nil {
 		return store.ActivityLogEntry{}, fmt.Errorf("insert activity: %w", err)
@@ -104,7 +106,7 @@ func (r *activityRepository) List(ctx context.Context, query store.ActivityQuery
 			id, ts_created, src, model_id, req_path, resp_content_type, resp_status_code,
 			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
 			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json,
-			task, route, peer_id, reasoning_tokens, capture_id
+			task, route, peer_id, reasoning_tokens, capture_id, session_id
 		FROM activity`+where+activityOrderBy(query)+`
 		LIMIT ? OFFSET ?`,
 		append(args, query.Limit, offset)...,
@@ -322,6 +324,7 @@ func scanActivity(scanner activityScanner) (store.ActivityLogEntry, error) {
 		&entry.PeerID,
 		&entry.Tokens.ReasoningTokens,
 		&entry.CaptureID,
+		&entry.SessionID,
 	); err != nil {
 		return store.ActivityLogEntry{}, fmt.Errorf("scan activity: %w", err)
 	}

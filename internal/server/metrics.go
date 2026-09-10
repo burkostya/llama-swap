@@ -242,7 +242,7 @@ func activitySource(r *http.Request) string {
 // newEntry starts the activity row for a finished request: what was asked,
 // who asked, where it was routed, and the request's metadata. It also returns
 // the upstream the router detected.
-func (mp *metricsMonitor) newEntry(modelID string, task hint.Task, r *http.Request, recorder *responseBodyCopier) (ActivityLogEntry, hint.Upstream) {
+func (mp *metricsMonitor) newEntry(modelID string, task hint.Task, r *http.Request, recorder *responseBodyCopier, sessionID ...string) (ActivityLogEntry, hint.Upstream) {
 	tm := ActivityLogEntry{
 		Timestamp:       time.Now(),
 		Model:           modelID,
@@ -254,6 +254,9 @@ func (mp *metricsMonitor) newEntry(modelID string, task hint.Task, r *http.Reque
 		Tokens:          TokenMetrics{ReasoningTokens: -1},
 	}
 	tm.Src = activitySource(r)
+	if len(sessionID) > 0 {
+		tm.SessionID = sessionID[0]
+	}
 
 	// The router or peer proxy fills the hint while dispatching; it says
 	// where the request went and which extractor understands the response.
@@ -282,8 +285,8 @@ func (mp *metricsMonitor) newEntry(modelID string, task hint.Task, r *http.Reque
 // recordRealtime files one row for a finished /v1/realtime websocket. Its
 // duration is the whole session, and its tokens and metadata are the
 // session's tallies. No capture is kept: the traffic is mostly audio.
-func (mp *metricsMonitor) recordRealtime(modelID string, task hint.Task, r *http.Request, recorder *responseBodyCopier) {
-	tm, _ := mp.newEntry(modelID, task, r, recorder)
+func (mp *metricsMonitor) recordRealtime(modelID string, task hint.Task, r *http.Request, recorder *responseBodyCopier, sessionID ...string) {
+	tm, _ := mp.newEntry(modelID, task, r, recorder, sessionID...)
 	recorder.realtime.fill(&tm)
 	stored, ok := mp.queueMetrics(tm)
 	if !ok {
@@ -292,8 +295,8 @@ func (mp *metricsMonitor) recordRealtime(modelID string, task hint.Task, r *http
 	mp.emitMetric(stored)
 }
 
-func (mp *metricsMonitor) record(modelID string, task hint.Task, r *http.Request, recorder *responseBodyCopier, cf captureFields, reqBody []byte, reqHeaders map[string]string) {
-	tm, upstream := mp.newEntry(modelID, task, r, recorder)
+func (mp *metricsMonitor) record(modelID string, task hint.Task, r *http.Request, recorder *responseBodyCopier, cf captureFields, reqBody []byte, reqHeaders map[string]string, sessionID ...string) {
+	tm, upstream := mp.newEntry(modelID, task, r, recorder, sessionID...)
 
 	queueAndEmit := func() {
 		stored, ok := mp.queueMetrics(tm)

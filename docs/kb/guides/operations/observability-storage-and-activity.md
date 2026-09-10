@@ -3,7 +3,7 @@ title: Observability, storage and Activity
 summary: Use logs, metrics, captures and the Activity view to diagnose requests and retain useful history.
 category: guides
 tags: [operations, logs, metrics, activity, captures, stdout, http, realtime, websocket]
-config_keys: [logLevel, logToStdout, metricsMaxInMemory, captureBuffer, store.path, store.persistCaptures]
+config_keys: [logLevel, logToStdout, metricsMaxInMemory, captureBuffer, store.path, store.persistCaptures, ui.activity.session_id]
 updated: 2026-11-03
 ---
 
@@ -118,3 +118,20 @@ What goes wrong:
 
 Do not put secrets in captures or debug logs. Reduce retention after diagnosing
 an issue.
+
+The fork also stores the first non-empty header configured in
+`ui.activity.session_id` as Activity's `session_id`, shown in the Session ID
+column and included when exporting that column. This is the caller's header
+value, separate from the anonymized key used by the session extensions. The
+upstream `src` field continues to identify the request source independently.
+
+```yaml
+ui:
+  activity:
+    session_id: [X-Session-ID]
+```
+
+Upgrading from either the earlier fork or upstream preserves Activity rows.
+Migration 3 reconciles their different migration-2 schemas and adds missing
+columns with empty defaults. Back up the SQLite database before deployment;
+schema downgrade requires restoring that backup.
