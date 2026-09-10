@@ -19,6 +19,7 @@ function entry(overrides: Partial<ActivityLogEntry> = {}): ActivityLogEntry {
     req_path: "/v1/chat/completions",
     resp_content_type: "application/json",
     resp_status_code: 200,
+    session_id: "session-default",
     duration_ms: 1000,
     has_capture: false,
     ...overrides,
@@ -208,6 +209,7 @@ describe("activityCellText", () => {
     expect(activityCellText(row, "req_path")).toBe("/v1/embeddings");
     expect(activityCellText(row, "resp_status_code")).toBe("500");
     expect(activityCellText(row, "resp_content_type")).toBe("text/event-stream");
+    expect(activityCellText(row, "session_id")).toBe("session-default");
     expect(activityCellText(row, "cached")).toBe((1024).toLocaleString());
     expect(activityCellText(row, "prompt")).toBe((2048).toLocaleString());
     expect(activityCellText(row, "generated")).toBe((512).toLocaleString());
@@ -219,10 +221,11 @@ describe("activityCellText", () => {
   });
 
   it("renders dashes for empty values", () => {
-    const empty = entry({ req_path: "", resp_content_type: "", resp_status_code: 0 });
+    const empty = entry({ req_path: "", resp_content_type: "", resp_status_code: 0, session_id: "" });
     expect(activityCellText(empty, "req_path")).toBe("-");
     expect(activityCellText(empty, "resp_content_type")).toBe("-");
     expect(activityCellText(empty, "resp_status_code")).toBe("-");
+    expect(activityCellText(empty, "session_id")).toBe("-");
     expect(activityCellText(empty, "cached")).toBe("-");
     expect(activityCellText(empty, "drafted")).toBe("-");
     expect(activityCellText(empty, "meta")).toBe("-");

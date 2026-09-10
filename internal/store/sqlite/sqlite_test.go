@@ -21,6 +21,7 @@ func TestStore_InsertListAndFilterActivity(t *testing.T) {
 		_, err := st.Activity().Insert(ctx, store.ActivityLogEntry{
 			Timestamp: time.Unix(int64(100+i), 0),
 			Model:     model,
+			SessionID: "session-" + model,
 			ReqPath:   "/v1/chat/completions",
 			Tokens: store.TokenMetrics{
 				InputTokens:     i + 1,
@@ -47,6 +48,9 @@ func TestStore_InsertListAndFilterActivity(t *testing.T) {
 	}
 	if page.Data[0].Metadata["trace"] != "m1" {
 		t.Fatalf("metadata = %+v", page.Data[0].Metadata)
+	}
+	if page.Data[0].SessionID != "session-m1" {
+		t.Fatalf("session ID = %q, want session-m1", page.Data[0].SessionID)
 	}
 
 	filtered, err := st.Activity().List(ctx, store.ActivityQuery{
@@ -419,6 +423,28 @@ func TestStore_NewFilePersistsActivity(t *testing.T) {
 	}
 	if stats.TotalRequests != 1 {
 		t.Fatalf("total requests = %d, want 1", stats.TotalRequests)
+	}
+}
+
+func TestStore_ActivitySessionIDDefaultsEmptyForLegacyRows(t *testing.T) {
+	ctx := context.Background()
+	st, err := New("")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer st.Close()
+
+	if _, err := st.db.ExecContext(ctx, `
+		INSERT INTO activity (ts_created, model_id, req_path)
+		VALUES (?, ?, ?)`, int64(1), "legacy", "/v1/chat/completions"); err != nil {
+		t.Fatalf("insert legacy-shaped row: %v", err)
+	}
+	page, err := st.Activity().List(ctx, store.ActivityQuery{Limit: 10, Page: 1})
+	if err != nil {
+		t.Fatalf("ListActivity: %v", err)
+	}
+	if len(page.Data) != 1 || page.Data[0].SessionID != "" {
+		t.Fatalf("legacy session ID = %q, want empty", page.Data[0].SessionID)
 	}
 }
 

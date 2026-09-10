@@ -120,6 +120,7 @@
       { id: "req_path", label: "Path", defaultVisible: false },
       { id: "resp_status_code", label: "Status", defaultVisible: true },
       { id: "resp_content_type", label: "Content-Type", defaultVisible: false },
+      { id: "session_id", label: "Session ID", defaultVisible: true },
       { id: "cached", label: "Cached", defaultVisible: true },
       { id: "prompt", label: "Prompt", defaultVisible: true },
       { id: "generated", label: "Generated", defaultVisible: true },
@@ -390,6 +391,12 @@
         accessorKey: "resp_content_type",
         header: "Content-Type",
         cell: ({ row }) => row.original.resp_content_type || "-",
+      },
+      {
+        id: "session_id",
+        accessorKey: "session_id",
+        header: "Session ID",
+        cell: ({ row }) => row.original.session_id || "-",
       },
       {
         id: "cached",

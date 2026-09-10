@@ -88,7 +88,8 @@ func runMigrations(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("sqlite store migrations: %w", err)
 	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations,
+		goose.WithGoMigrations(activitySessionMigration()))
 	if err != nil {
 		return fmt.Errorf("sqlite store migrations: %w", err)
 	}
