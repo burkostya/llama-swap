@@ -15,19 +15,19 @@ type Capacity struct{ *baseRouter }
 
 // NewCapacity validates resource limits and starts a router using the shared
 // process lifecycle and scheduler with capacity-based eviction planning.
-func NewCapacity(conf config.Config, logs *logmon.Group) (*Capacity, error) {
+func NewCapacity(conf config.Config, logs *logmon.Group, opts ...Option) (*Capacity, error) {
 	capacity := conf.Routing.Router.Settings.Capacity
 	if err := config.ValidateCapacity(capacity, conf.Models); err != nil {
 		return nil, err
 	}
 	planner := &capacitySwapper{capacity: capacity, models: conf.Models, logger: logs.ProxyLogs}
 	processes := make(map[string]process.Process, len(conf.Models))
-	base, err := newBaseRouter("capacity", conf, processes, logs.ProxyLogs, planner)
+	base, err := newBaseRouter("capacity", conf, processes, logs.ProxyLogs, planner, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("creating base router: %w", err)
 	}
 	for id, model := range conf.Models {
-		p, err := process.New(base.procCtx, id, model, logmon.NewWriter(logs.UpstreamLogs), logs.ProxyLogs)
+		p, err := base.processFactory.New(base.procCtx, id, model, logmon.NewWriter(logs.UpstreamLogs), logs.ProxyLogs)
 		if err != nil {
 			base.shutdownFn()
 			base.procCancel()

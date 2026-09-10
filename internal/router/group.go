@@ -12,7 +12,7 @@ type Group struct {
 	*baseRouter
 }
 
-func NewGroup(conf config.Config, logs *logmon.Group) (*Group, error) {
+func NewGroup(conf config.Config, logs *logmon.Group, opts ...Option) (*Group, error) {
 	modelToGroup := make(map[string]string)
 	for gid, gcfg := range conf.Routing.Router.Settings.Groups {
 		for _, mid := range gcfg.Members {
@@ -29,7 +29,7 @@ func NewGroup(conf config.Config, logs *logmon.Group) (*Group, error) {
 	}
 
 	processes := make(map[string]process.Process, len(modelToGroup))
-	base, err := newBaseRouter("group", conf, processes, logs.ProxyLogs, swapper)
+	base, err := newBaseRouter("group", conf, processes, logs.ProxyLogs, swapper, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("creating base router: %w", err)
 	}
@@ -42,7 +42,7 @@ func NewGroup(conf config.Config, logs *logmon.Group) (*Group, error) {
 			return nil, fmt.Errorf("no model config for %q", mid)
 		}
 		procLog := logmon.NewWriter(logs.UpstreamLogs)
-		p, err := process.New(base.procCtx, mid, modelCfg, procLog, logs.ProxyLogs)
+		p, err := base.processFactory.New(base.procCtx, mid, modelCfg, procLog, logs.ProxyLogs)
 		if err != nil {
 			base.shutdownFn()
 			base.procCancel()

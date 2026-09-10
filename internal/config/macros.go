@@ -117,12 +117,14 @@ func resolveConfigMacros(yamlStr string) (map[string]any, configMacroConfig, err
 	// default must exist now so its PORT placeholder participates in the same
 	// generic model pass as explicitly configured values.
 	models, _ := raw["models"].(map[string]any)
+	opaqueExtensionConfigsByModel := make(map[string]map[int]any)
 	for modelID, value := range models {
 		model, ok := value.(map[string]any)
 		if !ok {
 			continue
 		}
 		delete(model, "macros")
+		opaqueExtensionConfigsByModel[modelID] = detachOpaqueExtensionConfigs(model)
 		stripRawCommandComments(model)
 		if proxy, found := model["proxy"]; !found || proxy == nil {
 			model["proxy"] = MODEL_CONFIG_DEFAULT_PROXY
@@ -192,6 +194,7 @@ func resolveConfigMacros(yamlStr string) (map[string]any, configMacroConfig, err
 			nextPort++
 		}
 
+		restoreOpaqueExtensionConfigs(model, opaqueExtensionConfigsByModel[modelID])
 		if err := validateSetParamsByIDKeys(model, modelID); err != nil {
 			return nil, configMacroConfig{}, err
 		}
@@ -339,9 +342,85 @@ func validateConfigMacroUses(raw map[string]any) error {
 				continue
 			}
 			for field, fieldValue := range model {
+				if field == "extensions" {
+					if err := validateExtensionMacroUses(fieldValue, "models."+modelID+".extensions", modelID); err != nil {
+						return err
+					}
+					continue
+				}
 				if err := validateMacroUses(fieldValue, "models."+modelID+"."+field, modelID, field, field == "cmdStop"); err != nil {
 					return err
 				}
+			}
+		}
+	}
+	return nil
+}
+
+// detachOpaqueExtensionConfigs removes extension-owned config values while
+// core model macros are expanded. The values are restored before typed config
+// decoding so extension factories receive their original opaque YAML.
+func detachOpaqueExtensionConfigs(model map[string]any) map[int]any {
+	extensions, ok := model["extensions"].([]any)
+	if !ok {
+		return nil
+	}
+
+	configs := make(map[int]any)
+	for index, value := range extensions {
+		extension, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if config, found := extension["config"]; found {
+			configs[index] = config
+			delete(extension, "config")
+		}
+	}
+	return configs
+}
+
+func restoreOpaqueExtensionConfigs(model map[string]any, configs map[int]any) {
+	if len(configs) == 0 {
+		return
+	}
+	extensions, ok := model["extensions"].([]any)
+	if !ok {
+		return
+	}
+	for index, config := range configs {
+		if index < 0 || index >= len(extensions) {
+			continue
+		}
+		extension, ok := extensions[index].(map[string]any)
+		if ok {
+			extension["config"] = config
+		}
+	}
+}
+
+// validateExtensionMacroUses validates the core-owned extension envelope but
+// deliberately skips each extension's opaque config payload.
+func validateExtensionMacroUses(value any, path, modelID string) error {
+	extensions, ok := value.([]any)
+	if !ok {
+		return validateMacroUses(value, path, modelID, "extensions", false)
+	}
+	for index, value := range extensions {
+		extension, ok := value.(map[string]any)
+		if !ok {
+			if err := validateMacroUses(value, fmt.Sprintf("%s[%d]", path, index), modelID, "extensions", false); err != nil {
+				return err
+			}
+			continue
+		}
+		for field, fieldValue := range extension {
+			if field == "config" {
+				continue
+			}
+			fieldPath := fmt.Sprintf("%s[%d].%s", path, index, field)
+			if err := validateMacroUses(fieldValue, fieldPath, modelID, "extensions."+field, false); err != nil {
+				return err
 			}
 		}
 	}

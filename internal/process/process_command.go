@@ -17,6 +17,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/capcompat"
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/event"
+	"github.com/mostlygeek/llama-swap/internal/fork/extension"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
 )
@@ -103,6 +104,7 @@ type startResult struct {
 	cmdDone   chan struct{}
 	cancel    context.CancelFunc
 	handlerFn http.HandlerFunc
+	runtime   extension.BackendRuntime
 	err       error
 }
 
@@ -113,6 +115,7 @@ type ProcessCommand struct {
 
 	processLogger *logmon.Monitor
 	proxyLogger   *logmon.Monitor
+	extensions    *extension.Chain
 
 	// waitDelay is assigned to cmd.WaitDelay when starting the upstream
 	// process. Defaults to cmdWaitDelay; tests override it to keep the
@@ -150,6 +153,7 @@ func New(
 	conf config.ModelConfig,
 	processLogger *logmon.Monitor,
 	proxyLogger *logmon.Monitor,
+	opts ...Option,
 ) (*ProcessCommand, error) {
 	p := &ProcessCommand{
 		id:            id,
@@ -164,6 +168,11 @@ func New(
 		waitDelay:   cmdWaitDelay,
 	}
 	p.status.Store(&Status{State: StateStopped})
+	for _, opt := range opts {
+		if err := opt(p); err != nil {
+			return nil, err
+		}
+	}
 
 	go p.run()
 	return p, nil
@@ -211,6 +220,7 @@ func (p *ProcessCommand) run() {
 		cmd          *exec.Cmd
 		cmdDone      <-chan struct{}
 		cmdCancel    context.CancelFunc
+		runtime      extension.BackendRuntime
 		readyWaiters []waitReadyReq
 		// runResp parks the in-flight Run caller's response channel. The
 		// interface contract is that Run blocks until the process is
@@ -254,7 +264,7 @@ func (p *ProcessCommand) run() {
 			setState(StateShutdown)
 			if cmd != nil {
 				p.handler.Store(nil)
-				p.killProcess(cmd, cmdCancel, cmdDone, parentCancelGraceTimeout)
+				p.stopProcessWithExtensions(runtime, cmd, cmdCancel, cmdDone, parentCancelGraceTimeout)
 				cmd = nil
 				cmdDone = nil
 				cmdCancel = nil
@@ -268,6 +278,7 @@ func (p *ProcessCommand) run() {
 		// cmdDone is nil while no process is running, so this case is
 		// dormant outside of StateReady.
 		case <-cmdDone:
+			exitedCmd := cmd
 			if cmdCancel != nil {
 				cmdCancel()
 			}
@@ -275,6 +286,8 @@ func (p *ProcessCommand) run() {
 			cmdDone = nil
 			cmdCancel = nil
 			p.handler.Store(nil)
+			p.extensionsBackendExited(runtime, exitedCmd)
+			runtime = extension.BackendRuntime{}
 			setState(StateStopped)
 			p.proxyLogger.Warnf("<%s> upstream process exited unexpectedly", p.id)
 			// Safety net: readyWaiters is normally empty here because
@@ -347,6 +360,7 @@ func (p *ProcessCommand) run() {
 					cmd = res.cmd
 					cmdDone = res.cmdDone
 					cmdCancel = res.cancel
+					runtime = res.runtime
 					fn := res.handlerFn
 					p.handler.Store(&fn)
 					// A newly ready process starts a fresh idle window. Without this,
@@ -403,7 +417,7 @@ func (p *ProcessCommand) run() {
 				cancelStart()
 				res := <-resultCh
 				if res.cmd != nil {
-					p.killProcess(res.cmd, res.cancel, res.cmdDone, stop.timeout)
+					p.stopProcessWithExtensions(res.runtime, res.cmd, res.cancel, res.cmdDone, stop.timeout)
 				}
 				setState(StateStopped)
 				notifyWaiters(ErrStartAborted)
@@ -423,7 +437,7 @@ func (p *ProcessCommand) run() {
 				setState(StateShutdown)
 				res := <-resultCh
 				if res.cmd != nil {
-					p.killProcess(res.cmd, res.cancel, res.cmdDone, parentCancelGraceTimeout)
+					p.stopProcessWithExtensions(res.runtime, res.cmd, res.cancel, res.cmdDone, parentCancelGraceTimeout)
 				}
 				notifyWaiters(fmt.Errorf("[%s] shutdown", p.id))
 				respondRun(fmt.Errorf("[%s] shutdown", p.id))
@@ -441,11 +455,15 @@ func (p *ProcessCommand) run() {
 			toreDown := cmd != nil
 			if cmd != nil {
 				setState(StateStopping)
-				p.killProcess(cmd, cmdCancel, cmdDone, stop.timeout)
+				// Reject new requests before stop hooks begin draining leases. Calls
+				// that already loaded the previous handler keep it until their normal
+				// HTTP or streaming response completes.
+				p.handler.Store(nil)
+				p.stopProcessWithExtensions(runtime, cmd, cmdCancel, cmdDone, stop.timeout)
 				cmd = nil
 				cmdDone = nil
 				cmdCancel = nil
-				p.handler.Store(nil)
+				runtime = extension.BackendRuntime{}
 			}
 			// Stop is a no-op (and not an error) when already Stopped — this
 			// is what makes it idempotent for callers that don't track state.
@@ -588,7 +606,13 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		// detection runs alongside serving, with retries, for as long as the
 		// command runs.
 		go p.detectUpstream(cmdCtx, true)
-		return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: handlerFn}
+		runtime, wrapped, readyErr := p.extensionsBackendReady(startCtx, proxyURL, handlerFn)
+		if readyErr != nil {
+			result := abort(fmt.Errorf("backend-ready extensions: %w", readyErr))
+			p.extensionsStartFailed(runtime, readyErr)
+			return result
+		}
+		return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: wrapped.ServeHTTP, runtime: runtime}
 	}
 
 	// Wait 250ms for the command to start up before health checking
@@ -665,7 +689,13 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		return abort(ErrStartAborted)
 	}
 
-	return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: handlerFn}
+	runtime, wrapped, readyErr := p.extensionsBackendReady(startCtx, proxyURL, handlerFn)
+	if readyErr != nil {
+		result := abort(fmt.Errorf("backend-ready extensions: %w", readyErr))
+		p.extensionsStartFailed(runtime, readyErr)
+		return result
+	}
+	return startResult{cmd: cmd, cmdDone: cmdDone, cancel: cmdCancel, handlerFn: wrapped.ServeHTTP, runtime: runtime}
 }
 
 // sendStopSignal runs the configured CmdStop (if any) or sends SIGTERM to
@@ -741,9 +771,9 @@ func (p *ProcessCommand) sendStopSignal(cmd *exec.Cmd) error {
 // cancel() is still invoked (deferred) to release the context, but only after
 // the process has exited and os/exec's ctx watcher has already torn down, so it
 // never re-fires cmd.Cancel.
-func (p *ProcessCommand) killProcess(cmd *exec.Cmd, cancel context.CancelFunc, cmdDone <-chan struct{}, gracefulTimeout time.Duration) {
+func (p *ProcessCommand) killProcess(cmd *exec.Cmd, cancel context.CancelFunc, cmdDone <-chan struct{}, gracefulTimeout time.Duration) bool {
 	if cancel == nil {
-		return
+		return false
 	}
 	defer cancel()
 
@@ -764,7 +794,7 @@ func (p *ProcessCommand) killProcess(cmd *exec.Cmd, cancel context.CancelFunc, c
 
 	select {
 	case <-cmdDone:
-		return
+		return false
 	case <-timer.C:
 	}
 
@@ -774,6 +804,7 @@ func (p *ProcessCommand) killProcess(cmd *exec.Cmd, cancel context.CancelFunc, c
 		_ = killProcessTree(cmd)
 	}
 	<-cmdDone
+	return true
 }
 
 func (p *ProcessCommand) ID() string {
