@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -17,6 +18,15 @@ func skipIfNoSimpleResponder(t *testing.T) {
 	if _, err := os.Stat(simpleResponderPath); os.IsNotExist(err) {
 		t.Skipf("simple-responder not found at %s, run `make simple-responder`", simpleResponderPath)
 	}
+}
+
+func testBashShebang(t *testing.T) string {
+	t.Helper()
+	shell, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skipf("bash is required for shell-wrapper tests: %v", err)
+	}
+	return "#!" + shell + "\n"
 }
 
 func TestMain(m *testing.M) {

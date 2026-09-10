@@ -6,11 +6,21 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func testBashShebang(t *testing.T) string {
+	t.Helper()
+	shell, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skipf("bash is required for shell-wrapper tests: %v", err)
+	}
+	return "#!" + shell + "\n"
+}
 
 func TestWakeUpVLLM(t *testing.T) {
 	// Test successful wake up
@@ -108,7 +118,7 @@ func TestStartDaemonArgv(t *testing.T) {
 
 	script := filepath.Join(tmpDir, "write-argv.sh")
 	if err := os.WriteFile(script, []byte(
-		"#!/bin/bash\nprintf '%s\n' \"$@\" > \""+argvFile+"\"\nexit 0\n",
+		testBashShebang(t)+"printf '%s\n' \"$@\" > \""+argvFile+"\"\nexit 0\n",
 	), 0755); err != nil {
 		t.Fatalf("write helper script: %v", err)
 	}
