@@ -26,6 +26,7 @@ type ActivityLogEntry struct {
 	ReqPath         string            `json:"req_path"`
 	RespContentType string            `json:"resp_content_type"`
 	RespStatusCode  int               `json:"resp_status_code"`
+	SessionID       string            `json:"session_id"`
 	Tokens          TokenMetrics      `json:"tokens"`
 	DurationMs      int               `json:"duration_ms"`
 	HasCapture      bool              `json:"has_capture"`
@@ -80,6 +81,7 @@ var activitySortKeys = []string{
 	"req_path",
 	"resp_status_code",
 	"resp_content_type",
+	"session_id",
 	"cached",
 	"prompt",
 	"generated",

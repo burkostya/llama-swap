@@ -118,6 +118,8 @@ export function activityCellText(row: ActivityLogEntry, columnId: string): strin
       return String(row.resp_status_code || "-");
     case "resp_content_type":
       return row.resp_content_type || "-";
+    case "session_id":
+      return row.session_id || "-";
     case "cached":
       return row.tokens.cache_tokens > 0 ? row.tokens.cache_tokens.toLocaleString() : "-";
     case "prompt":

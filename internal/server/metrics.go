@@ -140,7 +140,7 @@ func activitySource(r *http.Request) string {
 // request only and set ErrorMsg to a description of the failure, so the error
 // can be inspected without storing unreadable raw response bytes. reqBody and
 // reqHeaders are the request data buffered before dispatch.
-func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *responseBodyCopier, cf captureFields, reqBody []byte, reqHeaders map[string]string) {
+func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *responseBodyCopier, cf captureFields, reqBody []byte, reqHeaders map[string]string, sessionID ...string) {
 	tm := ActivityLogEntry{
 		Timestamp:       time.Now(),
 		Model:           modelID,
@@ -150,6 +150,9 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 		DurationMs:      int(time.Since(recorder.StartTime()).Milliseconds()),
 	}
 	tm.Src = activitySource(r)
+	if len(sessionID) > 0 {
+		tm.SessionID = sessionID[0]
+	}
 
 	if ctxData, ok := swaputil.ReadContext(r.Context()); ok && len(ctxData.Metadata) > 0 {
 		tm.Metadata = make(map[string]string, len(ctxData.Metadata))

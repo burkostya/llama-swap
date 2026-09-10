@@ -384,7 +384,7 @@ func TestMetricsMonitor_RecordMetadata(t *testing.T) {
 	copier.WriteHeader(http.StatusOK)
 	copier.Write([]byte(`{"usage":{"prompt_tokens":1,"completion_tokens":2}}`))
 
-	mm.record("m", r, copier, 0, nil, nil)
+	mm.record("m", r, copier, 0, nil, nil, "session-123")
 
 	entries := metricsEntries(t, mm)
 	if len(entries) != 1 {
@@ -395,6 +395,20 @@ func TestMetricsMonitor_RecordMetadata(t *testing.T) {
 	}
 	if entries[0].Metadata["trace"] != "abc" {
 		t.Errorf("trace = %q, want abc", entries[0].Metadata["trace"])
+	}
+	if entries[0].SessionID != "session-123" {
+		t.Errorf("session ID = %q, want session-123", entries[0].SessionID)
+	}
+}
+
+func TestServer_ActivitySessionIDUsesConfiguredHeaderPriority(t *testing.T) {
+	headers := http.Header{
+		"X-Session-Affinity": []string{"session-affinity"},
+		"X-Session-Id":       []string{"session-fallback"},
+	}
+	got := activitySessionID(headers, []string{"x-missing", "x-session-affinity", "X-Session-ID"})
+	if got != "session-affinity" {
+		t.Fatalf("activitySessionID = %q, want session-affinity", got)
 	}
 }
 
