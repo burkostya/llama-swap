@@ -31,8 +31,8 @@
     {/if}
   </Button>
   {#if !$histogramCollapsed}
-    <div class="mb-3 flex flex-col gap-6 sm:flex-row">
-      <div class="w-full min-w-0 sm:w-1/2">
+    <div class="mb-3 grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <div class="w-full min-w-0">
         <div class="text-muted-foreground mb-1 text-sm font-medium">Prompt Processing</div>
         {#if stats?.prompt_histogram}
           <TokenHistogram
@@ -44,12 +44,24 @@
           <div class="text-muted-foreground py-6 text-center text-sm">No prompt speed data yet</div>
         {/if}
       </div>
-      <div class="w-full min-w-0 sm:w-1/2">
+      <div class="w-full min-w-0">
         <div class="text-muted-foreground mb-1 text-sm font-medium">Token Generation</div>
         {#if stats?.gen_histogram}
           <TokenHistogram data={stats.gen_histogram} unit="tokens/sec" />
         {:else}
           <div class="text-muted-foreground py-6 text-center text-sm">No generation speed data yet</div>
+        {/if}
+      </div>
+      <div class="w-full min-w-0">
+        <div class="text-muted-foreground mb-1 text-sm font-medium">Draft Acceptance</div>
+        {#if stats?.draft_histogram}
+          <TokenHistogram
+            data={stats.draft_histogram}
+            unit="acceptance rate (%)"
+            colorClass="text-violet-500 dark:text-violet-400"
+          />
+        {:else}
+          <div class="text-muted-foreground py-6 text-center text-sm">No draft acceptance data yet</div>
         {/if}
       </div>
     </div>

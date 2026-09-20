@@ -509,8 +509,8 @@ func TestServer_APIMetricsActivityInvalidFilters(t *testing.T) {
 func TestServer_APIMetricsStats(t *testing.T) {
 	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
 	for _, entry := range []ActivityLogEntry{
-		{Timestamp: time.Unix(1, 0), Model: "m1", Tokens: TokenMetrics{InputTokens: 1, OutputTokens: 2, CachedTokens: 1, PromptPerSecond: 10, TokensPerSecond: 20}},
-		{Timestamp: time.Unix(2, 0), Model: "m1", Tokens: TokenMetrics{InputTokens: 3, OutputTokens: 4, PromptPerSecond: 30, TokensPerSecond: 40}},
+		{Timestamp: time.Unix(1, 0), Model: "m1", Tokens: TokenMetrics{InputTokens: 1, OutputTokens: 2, CachedTokens: 1, DraftTokens: 20, DraftAccTokens: 10, PromptPerSecond: 10, TokensPerSecond: 20}},
+		{Timestamp: time.Unix(2, 0), Model: "m1", Tokens: TokenMetrics{InputTokens: 3, OutputTokens: 4, DraftTokens: 10, DraftAccTokens: 8, PromptPerSecond: 30, TokensPerSecond: 40}},
 		{Timestamp: time.Unix(3, 0), Model: "m2", Tokens: TokenMetrics{InputTokens: 5, OutputTokens: 6, PromptPerSecond: 50}},
 	} {
 		if _, ok := s.metrics.queueMetrics(entry); !ok {
@@ -532,6 +532,12 @@ func TestServer_APIMetricsStats(t *testing.T) {
 	}
 	if stats.PromptHistogram == nil || stats.GenerationHistogram == nil {
 		t.Fatalf("expected histograms: %+v", stats)
+	}
+	if stats.DraftHistogram == nil {
+		t.Fatalf("expected draft histogram: %+v", stats)
+	}
+	if stats.DraftHistogram.Min != 50 || stats.DraftHistogram.Max != 80 {
+		t.Fatalf("draft histogram range = %v..%v, want 50..80", stats.DraftHistogram.Min, stats.DraftHistogram.Max)
 	}
 }
 
