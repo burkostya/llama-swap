@@ -1,7 +1,12 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import type { ActivityLogEntry } from "../../lib/types";
-  import { activityRevision, getActivity, inflightRequestEntries } from "../../stores/api";
+  import type { ActivityLogEntry, ActivityStatsData } from "../../lib/types";
+  import {
+    activityRevision,
+    getActivity,
+    getActivityStats,
+    inflightRequestEntries,
+  } from "../../stores/api";
   import { connectionState } from "../../stores/theme";
   import { persistentStore } from "../../stores/persistent";
   import {
@@ -9,6 +14,7 @@
     normalizeActivityFilters,
     type ActivityFilters,
   } from "../../lib/activityFilters";
+  import ActivityStats from "../ActivityStats.svelte";
   import ActivityTable from "../ActivityTable.svelte";
 
   interface Props {
@@ -24,6 +30,7 @@
   );
 
   let modelMetrics = $state<ActivityLogEntry[]>([]);
+  let stats = $state<ActivityStatsData | null>(null);
   let page = $state(1);
   let limit = $state($storedPageSize);
   let sort = $state("id");
@@ -33,8 +40,11 @@
   // svelte-ignore state_referenced_locally
   let filters = $state<ActivityFilters>(normalizeActivityFilters($storedFilters));
   let requestID = 0;
+  let statsRequestID = 0;
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let statsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let lastRefresh = 0;
+  let lastStatsRefresh = 0;
 
   let modelInflightRequests = $derived(
     $inflightRequestEntries.filter((request) => request.model === modelId)
@@ -55,6 +65,27 @@
       totalPages = activity.total_pages;
     } catch (error) {
       console.error("Failed to refresh model activity:", error);
+    }
+  }
+
+  async function refreshStats() {
+    if (statsRefreshTimer !== null) {
+      clearTimeout(statsRefreshTimer);
+      statsRefreshTimer = null;
+    }
+    lastStatsRefresh = Date.now();
+    const id = ++statsRequestID;
+    const requestedModelID = modelId;
+    try {
+      const activityStats = await getActivityStats(requestedModelID);
+      if (id !== statsRequestID || requestedModelID !== modelId) return;
+      stats = activityStats;
+    } catch (error) {
+      // Statistics are supplementary to the activity table. Keep the table
+      // usable if the aggregate request fails.
+      if (id === statsRequestID && requestedModelID === modelId) {
+        console.error("Failed to refresh model activity stats:", error);
+      }
     }
   }
 
@@ -91,6 +122,17 @@
     }, wait);
   }
 
+  // scheduleStatsRefresh throttles SSE-driven stats refreshes independently
+  // from the table so browsing older pages does not stop the aggregate cards.
+  function scheduleStatsRefresh() {
+    if (statsRefreshTimer !== null) return;
+    const wait = Math.max(0, 1000 - (Date.now() - lastStatsRefresh));
+    statsRefreshTimer = setTimeout(() => {
+      statsRefreshTimer = null;
+      refreshStats();
+    }, wait);
+  }
+
   // Refresh immediately on connect and when the user changes the model or
   // paging/sorting.
   $effect(() => {
@@ -106,6 +148,18 @@
     });
   });
 
+  // Model changes must clear the previous model's aggregates immediately and
+  // invalidate any in-flight stats response before loading the new model.
+  $effect(() => {
+    modelId;
+    const connected = $connectionState === "connected";
+    untrack(() => {
+      stats = null;
+      statsRequestID++;
+      if (connected) refreshStats();
+    });
+  });
+
   // New activity only changes what page 1 shows; skip SSE-driven refreshes
   // while browsing older pages. seenRevision keeps the effect's initial run
   // (and re-runs from other deps) from scheduling a redundant fetch.
@@ -116,6 +170,7 @@
     untrack(() => {
       if (revision === seenRevision) return;
       seenRevision = revision;
+      scheduleStatsRefresh();
       if (page === 1) scheduleRefresh();
     });
   });
@@ -123,28 +178,33 @@
   $effect(() => {
     return () => {
       if (refreshTimer !== null) clearTimeout(refreshTimer);
+      if (statsRefreshTimer !== null) clearTimeout(statsRefreshTimer);
     };
   });
 </script>
 
-<ActivityTable
-  metrics={modelMetrics}
-  inflightRequests={modelInflightRequests}
-  storagePrefix="model-detail"
-  showModelColumn={false}
-  showPagination={true}
-  {page}
-  {limit}
-  {total}
-  totalPages={totalPages}
-  onPageChange={setPage}
-  onPageSizeChange={setPageSize}
-  {sort}
-  {order}
-  onSortChange={setSort}
-  {filters}
-  onFiltersChange={setFilters}
-  compact={true}
-  title="Recent Activity"
-  emptyMessage="No activity recorded for this model"
-/>
+<div class="space-y-4">
+  <ActivityStats {stats} />
+
+  <ActivityTable
+    metrics={modelMetrics}
+    inflightRequests={modelInflightRequests}
+    storagePrefix="model-detail"
+    showModelColumn={false}
+    showPagination={true}
+    {page}
+    {limit}
+    {total}
+    totalPages={totalPages}
+    onPageChange={setPage}
+    onPageSizeChange={setPageSize}
+    {sort}
+    {order}
+    onSortChange={setSort}
+    {filters}
+    onFiltersChange={setFilters}
+    compact={true}
+    title="Recent Activity"
+    emptyMessage="No activity recorded for this model"
+  />
+</div>
