@@ -22,6 +22,7 @@
   let range = $derived(data.max - data.min);
 
   function getXPosition(value: number): number {
+    if (range <= 0) return padding.left + chartWidth / 2;
     return padding.left + ((value - data.min) / range) * chartWidth;
   }
 </script>

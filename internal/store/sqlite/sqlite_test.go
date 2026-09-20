@@ -302,6 +302,8 @@ func TestStore_ActivityStats(t *testing.T) {
 			Model:     "m1",
 			Tokens: store.TokenMetrics{
 				CachedTokens:    2,
+				DraftTokens:     20,
+				DraftAccTokens:  10,
 				InputTokens:     10,
 				OutputTokens:    20,
 				PromptPerSecond: 100,
@@ -313,6 +315,8 @@ func TestStore_ActivityStats(t *testing.T) {
 			Model:     "m1",
 			Tokens: store.TokenMetrics{
 				CachedTokens:    -1,
+				DraftTokens:     40,
+				DraftAccTokens:  30,
 				InputTokens:     5,
 				OutputTokens:    8,
 				PromptPerSecond: 200,
@@ -321,8 +325,33 @@ func TestStore_ActivityStats(t *testing.T) {
 		},
 		{
 			Timestamp: time.Unix(3, 0),
+			Model:     "m1",
+			Tokens: store.TokenMetrics{
+				DraftTokens:    10,
+				DraftAccTokens: 0,
+			},
+		},
+		{
+			Timestamp: time.Unix(4, 0),
+			Model:     "m1",
+			Tokens: store.TokenMetrics{
+				DraftTokens:    10,
+				DraftAccTokens: -1,
+			},
+		},
+		{
+			Timestamp: time.Unix(5, 0),
+			Model:     "m1",
+			Tokens: store.TokenMetrics{
+				DraftAccTokens: 10,
+			},
+		},
+		{
+			Timestamp: time.Unix(6, 0),
 			Model:     "m2",
 			Tokens: store.TokenMetrics{
+				DraftTokens:     10,
+				DraftAccTokens:  8,
 				InputTokens:     7,
 				OutputTokens:    9,
 				PromptPerSecond: 300,
@@ -339,11 +368,24 @@ func TestStore_ActivityStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ActivityStats: %v", err)
 	}
-	if stats.TotalRequests != 2 || stats.TotalInputTokens != 15 || stats.TotalOutputTokens != 28 || stats.TotalCacheTokens != 2 {
+	if stats.TotalRequests != 5 || stats.TotalInputTokens != 15 || stats.TotalOutputTokens != 28 || stats.TotalCacheTokens != 2 {
 		t.Fatalf("stats = %+v", stats)
 	}
 	if stats.PromptHistogram == nil || stats.GenerationHistogram == nil {
 		t.Fatalf("expected histograms: %+v", stats)
+	}
+	if stats.DraftHistogram == nil {
+		t.Fatalf("expected draft histogram: %+v", stats)
+	}
+	if stats.DraftHistogram.Min != 0 || stats.DraftHistogram.Max != 75 {
+		t.Fatalf("draft histogram range = %v..%v, want 0..75", stats.DraftHistogram.Min, stats.DraftHistogram.Max)
+	}
+	binTotal := 0
+	for _, count := range stats.DraftHistogram.Bins {
+		binTotal += count
+	}
+	if binTotal != 3 {
+		t.Fatalf("draft histogram sample count = %d, want 3", binTotal)
 	}
 }
 
