@@ -211,6 +211,7 @@ export interface ActivityStatsData {
   total_cache_tokens: number;
   prompt_histogram: HistogramData | null;
   gen_histogram: HistogramData | null;
+  draft_histogram: HistogramData | null;
 }
 
 export interface VersionInfo {

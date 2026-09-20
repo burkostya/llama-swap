@@ -137,6 +137,7 @@ type ActivityStats struct {
 	TotalCacheTokens    int            `json:"total_cache_tokens"`
 	PromptHistogram     *HistogramData `json:"prompt_histogram"`
 	GenerationHistogram *HistogramData `json:"gen_histogram"`
+	DraftHistogram      *HistogramData `json:"draft_histogram"`
 }
 
 // HistogramData is a binned distribution with percentile summaries.
