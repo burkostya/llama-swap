@@ -427,6 +427,7 @@ func TestServer_APIMetricsActivityFilters(t *testing.T) {
 		if _, ok := s.metrics.queueMetrics(ActivityLogEntry{
 			Timestamp: time.Unix(int64(1000+i), 0),
 			Model:     model,
+			SessionID: []string{"alpha", "beta", "alpha", "beta"}[i],
 			ReqPath:   "/v1/chat/completions",
 		}); !ok {
 			t.Fatal("queueMetrics failed")
@@ -450,6 +451,10 @@ func TestServer_APIMetricsActivityFilters(t *testing.T) {
 		{"min id only", "?min_id=4", []int{4}},
 		{"max id only", "?max_id=2", []int{2, 1}},
 		{"id range and model combined", "?model=m1&min_id=2", []int{3}},
+		{"session combines models", "?session_id=beta", []int{4, 2}},
+		{"session and id combined", "?session_id=beta&min_id=3", []int{4}},
+		{"session match is exact", "?session_id=%20beta%20", []int{}},
+		{"unknown session", "?session_id=missing", []int{}},
 		{"start only", "?start=" + at(2), []int{4, 3}},
 		{"end only", "?end=" + at(1), []int{2, 1}},
 		{"time range inclusive", "?start=" + at(1) + "&end=" + at(2), []int{3, 2}},
@@ -509,9 +514,9 @@ func TestServer_APIMetricsActivityInvalidFilters(t *testing.T) {
 func TestServer_APIMetricsStats(t *testing.T) {
 	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
 	for _, entry := range []ActivityLogEntry{
-		{Timestamp: time.Unix(1, 0), Model: "m1", Tokens: TokenMetrics{InputTokens: 1, OutputTokens: 2, CachedTokens: 1, DraftTokens: 20, DraftAccTokens: 10, PromptPerSecond: 10, TokensPerSecond: 20}},
-		{Timestamp: time.Unix(2, 0), Model: "m1", Tokens: TokenMetrics{InputTokens: 3, OutputTokens: 4, DraftTokens: 10, DraftAccTokens: 8, PromptPerSecond: 30, TokensPerSecond: 40}},
-		{Timestamp: time.Unix(3, 0), Model: "m2", Tokens: TokenMetrics{InputTokens: 5, OutputTokens: 6, PromptPerSecond: 50}},
+		{Timestamp: time.Unix(1, 0), Model: "m1", SessionID: "shared", Tokens: TokenMetrics{InputTokens: 1, OutputTokens: 2, CachedTokens: 1, DraftTokens: 20, DraftAccTokens: 10, PromptPerSecond: 10, TokensPerSecond: 20}},
+		{Timestamp: time.Unix(2, 0), Model: "m1", SessionID: "other", Tokens: TokenMetrics{InputTokens: 3, OutputTokens: 4, DraftTokens: 10, DraftAccTokens: 8, PromptPerSecond: 30, TokensPerSecond: 40}},
+		{Timestamp: time.Unix(3, 0), Model: "m2", SessionID: "shared", Tokens: TokenMetrics{InputTokens: 5, OutputTokens: 6, PromptPerSecond: 50}},
 	} {
 		if _, ok := s.metrics.queueMetrics(entry); !ok {
 			t.Fatal("queueMetrics failed")
@@ -538,6 +543,39 @@ func TestServer_APIMetricsStats(t *testing.T) {
 	}
 	if stats.DraftHistogram.Min != 50 || stats.DraftHistogram.Max != 80 {
 		t.Fatalf("draft histogram range = %v..%v, want 50..80", stats.DraftHistogram.Min, stats.DraftHistogram.Max)
+	}
+
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/metrics/stats?session_id=shared", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("session stats status = %d body=%q", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
+		t.Fatalf("unmarshal session stats: %v", err)
+	}
+	if stats.TotalRequests != 2 || stats.TotalInputTokens != 6 || stats.TotalOutputTokens != 8 || stats.TotalCacheTokens != 1 {
+		t.Fatalf("session stats = %+v", stats)
+	}
+	if stats.PromptHistogram == nil || stats.PromptHistogram.Min != 10 || stats.PromptHistogram.Max != 50 {
+		t.Fatalf("session prompt histogram = %+v", stats.PromptHistogram)
+	}
+	if stats.GenerationHistogram == nil || stats.GenerationHistogram.Min != 20 || stats.GenerationHistogram.Max != 20 {
+		t.Fatalf("session generation histogram = %+v", stats.GenerationHistogram)
+	}
+	if stats.DraftHistogram == nil || stats.DraftHistogram.Min != 50 || stats.DraftHistogram.Max != 50 {
+		t.Fatalf("session draft histogram = %+v", stats.DraftHistogram)
+	}
+
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/metrics/stats?session_id=missing", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("unknown session stats status = %d body=%q", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
+		t.Fatalf("unmarshal unknown session stats: %v", err)
+	}
+	if stats.TotalRequests != 0 || stats.TotalInputTokens != 0 || stats.TotalOutputTokens != 0 || stats.TotalCacheTokens != 0 || stats.PromptHistogram != nil || stats.GenerationHistogram != nil || stats.DraftHistogram != nil {
+		t.Fatalf("unknown session stats = %+v, want empty", stats)
 	}
 }
 

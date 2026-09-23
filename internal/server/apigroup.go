@@ -214,7 +214,8 @@ func (s *Server) handleAPIActivity(w http.ResponseWriter, r *http.Request) {
 // handleAPIActivityStats serves aggregate activity statistics and histograms.
 func (s *Server) handleAPIActivityStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := s.store.Activity().Stats(r.Context(), store.ActivityStatsQuery{
-		Model: strings.TrimSpace(r.URL.Query().Get("model")),
+		Model:     strings.TrimSpace(r.URL.Query().Get("model")),
+		SessionID: r.URL.Query().Get("session_id"),
 	})
 	if err != nil {
 		swaputil.SendResponse(w, r, http.StatusInternalServerError, "failed to get activity stats")
@@ -272,6 +273,7 @@ func parseActivityQuery(r *http.Request) (store.ActivityQuery, error) {
 		Page:  1,
 	}
 	query.SrcPrefix = r.URL.Query().Get("src_prefix")
+	query.SessionID = r.URL.Query().Get("session_id")
 
 	// model repeats to filter on several models at once (?model=a&model=b).
 	// A single ?model=x stays a plain exact match.

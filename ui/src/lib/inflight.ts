@@ -15,10 +15,14 @@ export function sessionID(
   sessionHeaders: string[]
 ): string {
   for (const name of sessionHeaders) {
-    const value = requestHeader(headers, name);
+    const value = requestHeader(headers, name).trim();
     if (value) return value;
   }
   return "";
+}
+
+export function sessionPath(id: string): string | null {
+  return id ? `/sessions/${encodeURIComponent(id)}` : null;
 }
 
 export function formatBytes(bytes: number): string {

@@ -51,6 +51,11 @@ The fork also stores the first non-empty header configured in
 column and included when exporting that column. This is the caller's header
 value, separate from the anonymized key used by the session extensions. The
 upstream `src` field continues to identify the request source independently.
+By default Activity checks `X-Session-ID` and then `X-Litellm-Session-Id`.
+Click a non-empty Session ID to open all recorded requests and statistics for
+that ID across models. The Activity and stats APIs accept the same exact-match
+filter as `session_id`; for example, `/api/metrics/activity?session_id=chat-42`
+and `/api/metrics/stats?session_id=chat-42`.
 
 ```yaml
 ui:
