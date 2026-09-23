@@ -357,6 +357,7 @@ export function fetchPlaygroundModels(): Promise<Model[]> {
 
 export async function getActivity(params: {
   model?: string;
+  sessionID?: string;
   page?: number;
   limit?: number;
   sort?: string;
@@ -366,6 +367,7 @@ export async function getActivity(params: {
 } = {}): Promise<ActivityPage> {
   const query = new URLSearchParams();
   if (params.model) query.set("model", params.model);
+  if (params.sessionID) query.set("session_id", params.sessionID);
   if (params.page) query.set("page", String(params.page));
   if (params.limit) query.set("limit", String(params.limit));
   if (params.sort) query.set("sort", params.sort);
@@ -394,9 +396,10 @@ export async function fetchTailcatStatus(): Promise<TailcatStatus> {
   return status;
 }
 
-export async function getActivityStats(model?: string): Promise<ActivityStatsData> {
+export async function getActivityStats(model?: string, sessionID?: string): Promise<ActivityStatsData> {
   const query = new URLSearchParams();
   if (model) query.set("model", model);
+  if (sessionID) query.set("session_id", sessionID);
   const url = query.size > 0 ? `/api/metrics/stats?${query}` : "/api/metrics/stats";
 
   const response = await fetch(apiUrl(url));

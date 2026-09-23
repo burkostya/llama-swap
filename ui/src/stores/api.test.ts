@@ -7,6 +7,7 @@ import {
   fetchProfiles,
   fetchTailcatStatus,
   getActivity,
+  getActivityStats,
   getHardware,
   handleAPIEventMessage,
   hasListedModels,
@@ -52,6 +53,24 @@ describe("tailcat api", () => {
     await getActivity({ srcPrefix: "tc:", page: 2, limit: 10, sort: "src", order: "asc" });
     expect(fetch).toHaveBeenCalledWith(
       "/api/metrics/activity?page=2&limit=10&sort=src&order=asc&src_prefix=tc%3A"
+    );
+  });
+
+  it("adds the exact session ID to activity and stats requests", async () => {
+    const response = { data: [], page: 1, limit: 25, total: 0, total_pages: 0 };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => response }));
+
+    const sessionID = "tenant/a + b";
+    await getActivity({ sessionID, page: 1 });
+    await getActivityStats(undefined, sessionID);
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/metrics/activity?session_id=tenant%2Fa+%2B+b&page=1"
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/metrics/stats?session_id=tenant%2Fa+%2B+b"
     );
   });
 });
