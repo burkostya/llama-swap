@@ -42,6 +42,7 @@
     "/help": AlwaysMountedStub,
     "/models": wrap({ asyncComponent: () => import("./routes/ModelsDash.svelte"), loadingComponent: RouteLoading }),
     "/models/:id": wrap({ asyncComponent: () => import("./routes/ModelDetail.svelte"), loadingComponent: RouteLoading }),
+    "/sessions/:id": wrap({ asyncComponent: () => import("./routes/SessionDetail.svelte"), loadingComponent: RouteLoading }),
     "/logs": wrap({ asyncComponent: () => import("./routes/LogViewer.svelte"), loadingComponent: RouteLoading }),
     "/activity": wrap({ asyncComponent: () => import("./routes/Activity.svelte"), loadingComponent: RouteLoading }),
     "/settings": wrap({ asyncComponent: () => import("./routes/Settings.svelte"), loadingComponent: RouteLoading }),
@@ -79,6 +80,10 @@
     if ($currentRoute.startsWith("/models/")) {
       const id = $currentRoute.slice("/models/".length);
       return id ? `Models / ${decodeURIComponent(id)}` : "Models";
+    }
+    if ($currentRoute.startsWith("/sessions/")) {
+      const id = $currentRoute.slice("/sessions/".length);
+      return id ? `Sessions / ${decodeURIComponent(id)}` : "Sessions";
     }
     if ($currentRoute === "/models") {
       return "Models";

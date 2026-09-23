@@ -42,6 +42,7 @@
   import ViewCaptureButton from "./activity-table/ViewCaptureButton.svelte";
   import MetaCell from "./activity-table/MetaCell.svelte";
   import ModelLink from "./activity-table/ModelLink.svelte";
+  import SessionLink from "./activity-table/SessionLink.svelte";
   import MiddleEllipsis from "./activity-table/MiddleEllipsis.svelte";
   import SourceCell from "./activity-table/SourceCell.svelte";
   import ExportDialog from "./activity-table/ExportDialog.svelte";
@@ -396,7 +397,8 @@
         id: "session_id",
         accessorKey: "session_id",
         header: "Session ID",
-        cell: ({ row }) => row.original.session_id || "-",
+        cell: ({ row }) =>
+          renderComponent(SessionLink, { sessionId: row.original.session_id }),
       },
       {
         id: "cached",
@@ -771,7 +773,7 @@
                     <MiddleEllipsis value={userAgent} tailLength={18} className="max-w-[20rem] text-xs" />
                   {:else if columnId === "session_id"}
                     {@const session = sessionID(request.req_headers, $uiConfig.activity.session_id)}
-                    <MiddleEllipsis value={session} tailLength={8} className="max-w-[14rem] font-mono text-xs" />
+                    <SessionLink sessionId={session} />
                   {:else if columnId === "bytes_received"}
                     <span class="font-mono text-xs tabular-nums">{formatBytes(request.resp_bytes)}</span>
                   {/if}

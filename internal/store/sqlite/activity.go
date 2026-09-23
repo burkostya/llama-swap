@@ -134,10 +134,15 @@ func (r *activityRepository) Stats(ctx context.Context, query store.ActivityStat
 	if model := strings.TrimSpace(query.Model); model != "" {
 		filter.Models = []string{model}
 	}
+	filter.SessionID = query.SessionID
 	where, args := activityWhere(filter)
+	totalExpr := "COALESCE(MAX(id), 0)"
+	if query.SessionID != "" {
+		totalExpr = "COUNT(*)"
+	}
 	row := r.db.QueryRowContext(ctx, `
 		SELECT
-			COALESCE(MAX(id), 0),
+			`+totalExpr+`,
 			COALESCE(SUM(input_tokens), 0),
 			COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(CASE WHEN cache_tokens > 0 THEN cache_tokens ELSE 0 END), 0)
@@ -252,6 +257,7 @@ func activityWhere(filter store.ActivityFilter) (string, []any) {
 	}
 
 	if !filter.Start.IsZero() {
+		// Time filters remain independent of the exact session match.
 		conditions = append(conditions, "ts_created >= ?")
 		args = append(args, filter.Start.Unix())
 	}
@@ -274,6 +280,10 @@ func activityWhere(filter store.ActivityFilter) (string, []any) {
 		args = append(args, filter.SrcPrefix, filter.SrcPrefix+"\U0010FFFF")
 	}
 
+	if filter.SessionID != "" {
+		conditions = append(conditions, "session_id = ?")
+		args = append(args, filter.SessionID)
+	}
 	if len(conditions) == 0 {
 		return "", nil
 	}

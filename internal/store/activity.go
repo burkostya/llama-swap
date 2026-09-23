@@ -37,6 +37,7 @@ type ActivityLogEntry struct {
 // ActivityFilter narrows which activity rows a query matches. The zero value
 // matches every row, and each field is independent: set fields are ANDed.
 type ActivityFilter struct {
+	SessionID string    // exact session_id match; empty matches every session
 	Models    []string  // model IN (...); blank entries are ignored, empty matches all models
 	Start     time.Time // inclusive lower bound on Timestamp; zero is unbounded
 	End       time.Time // inclusive upper bound on Timestamp; zero is unbounded
@@ -126,7 +127,8 @@ func TotalPages(total, limit int) int {
 
 // ActivityStatsQuery narrows a Stats call. An empty Model matches all models.
 type ActivityStatsQuery struct {
-	Model string
+	Model     string
+	SessionID string
 }
 
 // ActivityStats are aggregate totals and speed histograms over activity rows.
