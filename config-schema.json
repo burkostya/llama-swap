@@ -714,6 +714,59 @@
                         },
                         "additionalProperties": false,
                         "description": "Defines what the model accepts for input, output and other metadata. Used in v1/models to inform clients what the model can do. Fields left unset are filled in automatically from the upstream server unless disableAuto is true."
+                    },
+                    "activation": {
+                        "type": "string",
+                        "enum": [
+                            "request",
+                            "demand",
+                            "both"
+                        ],
+                        "default": "request",
+                        "description": "Activation source in resources mode; demand-only workers do not start from HTTP polling."
+                    },
+                    "resources": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "uniqueItems": true,
+                        "description": "Exclusive named resources allocated together before starting this backend."
+                    },
+                    "drain": {
+                        "type": "object",
+                        "properties": {
+                            "signal": {
+                                "type": "string",
+                                "enum": [
+                                    "SIGTERM",
+                                    "SIGINT",
+                                    "SIGUSR1",
+                                    "SIGUSR2"
+                                ],
+                                "default": "SIGTERM"
+                            },
+                            "target": {
+                                "type": "string",
+                                "enum": [
+                                    "process"
+                                ],
+                                "default": "process"
+                            },
+                            "timeout": {
+                                "type": "string",
+                                "default": "120s",
+                                "description": "Overdue warning threshold; never an automatic kill deadline."
+                            },
+                            "onTimeout": {
+                                "type": "string",
+                                "enum": [
+                                    "block"
+                                ],
+                                "default": "block"
+                            }
+                        },
+                        "additionalProperties": false
                     }
                 }
             }
@@ -780,7 +833,10 @@
                 },
                 "models": {
                     "type": "array",
-                    "items": { "type": "string", "minLength": 1 },
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    },
                     "default": [],
                     "description": "Exact public model request IDs exposed through Tailcat. The -listen-tailcat flag requires at least one entry; '*' exposes every callable model."
                 },
@@ -1044,16 +1100,17 @@
                 },
                 "router": {
                     "type": "object",
-                    "description": "Router configuration. Selects between the group and matrix swapping strategies.",
+                    "description": "Router configuration: group, matrix, or exclusive named resources.",
                     "properties": {
                         "use": {
                             "type": "string",
                             "enum": [
                                 "group",
-                                "matrix"
+                                "matrix",
+                                "resources"
                             ],
                             "default": "group",
-                            "description": "Router to use. 'group' uses static groups, 'matrix' uses the solver-based swap matrix."
+                            "description": "Select group, matrix, or the opt-in Linux resources router."
                         },
                         "settings": {
                             "type": "object",
@@ -1063,6 +1120,46 @@
                                 },
                                 "matrix": {
                                     "$ref": "#/definitions/matrixConfig"
+                                },
+                                "resources": {
+                                    "type": "object",
+                                    "required": [
+                                        "stateDir"
+                                    ],
+                                    "properties": {
+                                        "stateDir": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "description": "Private persistent ownership directory, exclusively locked by this supervisor."
+                                        },
+                                        "demandTimeout": {
+                                            "type": "string",
+                                            "default": "30s",
+                                            "description": "Heartbeat lifetime; expiry withdraws demand, never releases a live owner."
+                                        },
+                                        "pools": {
+                                            "type": "object",
+                                            "propertyNames": {
+                                                "pattern": "^[a-zA-Z0-9_-]+$"
+                                            },
+                                            "additionalProperties": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "parameters": {
+                                                        "type": "object",
+                                                        "additionalProperties": {
+                                                            "type": "string"
+                                                        },
+                                                        "propertyNames": {
+                                                            "pattern": "^[a-zA-Z0-9_-]+$"
+                                                        }
+                                                    }
+                                                },
+                                                "additionalProperties": false
+                                            }
+                                        }
+                                    },
+                                    "additionalProperties": false
                                 }
                             },
                             "additionalProperties": false

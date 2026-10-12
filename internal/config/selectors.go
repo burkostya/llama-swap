@@ -122,6 +122,18 @@ func validateSpilloverCoexistence(config Config, selectorID string, targets []st
 		return nil
 	}
 
+	if config.Routing.Router.Use == "resources" {
+		used := map[string]bool{}
+		for _, id := range targets {
+			for _, name := range config.Models[id].Resources {
+				if used[name] {
+					return fmt.Errorf("selectors.%s: spillover targets share resource %s", selectorID, name)
+				}
+				used[name] = true
+			}
+		}
+		return nil
+	}
 	if config.Routing.Router.Use == "matrix" {
 		matrix := config.Routing.Router.Settings.Matrix
 		if matrix != nil && matrix.program != nil && matrix.program.CanContainAll(targets) {

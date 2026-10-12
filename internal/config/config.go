@@ -283,6 +283,8 @@ type RouterConfig struct {
 }
 
 type RouterSettings struct {
+	Resources *ResourceConfig `yaml:"resources"`
+
 	Groups map[string]GroupConfig `yaml:"groups"`
 	Matrix *MatrixConfig          `yaml:"matrix"`
 }

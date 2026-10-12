@@ -208,6 +208,8 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		// routing.router.use selects which one is active, so there is no conflict.
 		rs := config.Routing.Router.Settings
 		switch config.Routing.Router.Use {
+		case "resources":
+			// Resource mode is independent of groups/matrix.
 		case "matrix":
 			if rs.Matrix == nil {
 				return Config{}, fmt.Errorf("routing.router.use is 'matrix' but routing.router.settings.matrix is not set")
@@ -216,7 +218,7 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		case "group", "":
 			config.Groups = rs.Groups
 		default:
-			return Config{}, fmt.Errorf("routing.router.use: unknown router %q (valid: group, matrix)", config.Routing.Router.Use)
+			return Config{}, fmt.Errorf("routing.router.use: unknown router %q (valid: group, matrix, resources)", config.Routing.Router.Use)
 		}
 	}
 
@@ -229,7 +231,7 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		if err := ValidateMatrix(config.Matrix, config.Models); err != nil {
 			return Config{}, fmt.Errorf("matrix: %w", err)
 		}
-	} else {
+	} else if config.Routing.Router.Use != "resources" {
 		config = AddDefaultGroupToConfig(config)
 
 		// Validate group members
@@ -255,12 +257,15 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 	// compiled matrix program stays in one place.
 	if config.Matrix != nil {
 		config.Routing.Router.Use = "matrix"
-	} else {
+	} else if config.Routing.Router.Use != "resources" {
 		config.Routing.Router.Use = "group"
 	}
 	config.Routing.Router.Settings.Matrix = config.Matrix
 	config.Routing.Router.Settings.Groups = config.Groups
 
+	if err := validateResources(&config); err != nil {
+		return Config{}, err
+	}
 	if config.Routing.Scheduler.Use == "" {
 		config.Routing.Scheduler.Use = "fifo"
 	}
