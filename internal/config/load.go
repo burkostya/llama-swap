@@ -207,7 +207,7 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 	// either style, never both.
 	hasTopLevel := config.Matrix != nil || config.Groups != nil
 	rtr := config.Routing.Router
-	hasRouting := rtr.Use != "" || rtr.Settings.Matrix != nil || len(rtr.Settings.Groups) > 0 || rtr.Settings.Capacity != nil
+	hasRouting := rtr.Use != "" || rtr.Settings.Matrix != nil || len(rtr.Settings.Groups) > 0 || rtr.Settings.Capacity != nil || rtr.Settings.Resources != nil
 
 	if hasTopLevel && hasRouting {
 		return Config{}, fmt.Errorf("config uses both the legacy top-level 'matrix'/'groups' keys and the new 'routing.router' block; please migrate the top-level keys into 'routing.router' and remove them")
@@ -222,6 +222,8 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 			if err := ValidateCapacity(rs.Capacity, config.Models); err != nil {
 				return Config{}, fmt.Errorf("routing.router.settings.capacity: %w", err)
 			}
+		case "resources":
+			// Resource mode is independent of groups/matrix.
 		case "matrix":
 			if rs.Matrix == nil {
 				return Config{}, fmt.Errorf("routing.router.use is 'matrix' but routing.router.settings.matrix is not set")
@@ -230,7 +232,7 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		case "group", "":
 			config.Groups = rs.Groups
 		default:
-			return Config{}, fmt.Errorf("routing.router.use: unknown router %q (valid: group, matrix, capacity)", config.Routing.Router.Use)
+			return Config{}, fmt.Errorf("routing.router.use: unknown router %q (valid: group, matrix, capacity, resources)", config.Routing.Router.Use)
 		}
 	}
 
@@ -243,7 +245,7 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		if err := ValidateMatrix(config.Matrix, config.Models); err != nil {
 			return Config{}, fmt.Errorf("matrix: %w", err)
 		}
-	} else if rtr.Use != "capacity" {
+	} else if rtr.Use != "capacity" && rtr.Use != "resources" {
 		config = AddDefaultGroupToConfig(config)
 
 		// Validate group members
@@ -269,12 +271,15 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 	// compiled matrix program stays in one place.
 	if config.Matrix != nil {
 		config.Routing.Router.Use = "matrix"
-	} else if rtr.Use != "capacity" {
+	} else if rtr.Use != "capacity" && rtr.Use != "resources" {
 		config.Routing.Router.Use = "group"
 	}
 	config.Routing.Router.Settings.Matrix = config.Matrix
 	config.Routing.Router.Settings.Groups = config.Groups
 
+	if err := validateResources(&config); err != nil {
+		return Config{}, err
+	}
 	if config.Routing.Scheduler.Use == "" {
 		config.Routing.Scheduler.Use = "fifo"
 	}

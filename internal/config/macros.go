@@ -430,6 +430,9 @@ func validateExtensionMacroUses(value any, path, modelID string) error {
 func validateMacroUses(value any, path, modelID, fieldPath string, allowPID bool) error {
 	switch v := value.(type) {
 	case string:
+		if strings.Contains(v, "${RESOURCE:") && (modelID == "" || (fieldPath != "cmd" && fieldPath != "cmdStop" && fieldPath != "env" && !strings.HasPrefix(fieldPath, "env["))) {
+			return fmt.Errorf("%s: resource references are only allowed in model cmd, cmdStop and env", path)
+		}
 		matches := macroPatternRegex.FindAllStringSubmatch(v, -1)
 		for _, match := range matches {
 			macroName := match[1]
