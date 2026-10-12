@@ -245,6 +245,12 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 			discardExtensionManager(extensionManager)
 			return nil, fmt.Errorf("creating capacity router: %w", err)
 		}
+	case "resources":
+		local, err = router.NewResources(cfg, logs.ProxyLogs, logs.UpstreamLogs, routerOpts...)
+		if err != nil {
+			discardExtensionManager(extensionManager)
+			return nil, fmt.Errorf("creating resources router: %w", err)
+		}
 	case "matrix":
 		local, err = router.NewMatrix(cfg, logs, routerOpts...)
 		if err != nil {
@@ -259,6 +265,12 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 		}
 	}
 
+	constructed := false
+	defer func() {
+		if !constructed {
+			_ = local.Shutdown(0)
+		}
+	}()
 	peer, err := router.NewPeer(cfg, logs.ProxyLogs)
 	if err != nil {
 		discardExtensionManager(extensionManager)
@@ -317,6 +329,7 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 
 	s.routes()
 	s.startPreload()
+	constructed = true
 	return s, nil
 }
 
@@ -456,6 +469,9 @@ func (s *Server) routes() {
 	// Prometheus metrics (wrapped by apiChain, matches the legacy endpoint).
 	mux.Handle("GET /metrics", apiChain.ThenFunc(s.handleMetrics))
 
+	mux.Handle("PUT /api/resources/demand", apiChain.ThenFunc(s.handleResourceDemand))
+	mux.Handle("GET /api/resources", apiChain.ThenFunc(s.handleResources))
+	mux.Handle("POST /api/resources/force-stop", apiChain.ThenFunc(s.handleResourceForceStop))
 	// Operations endpoints.
 	mux.Handle("GET /unload", apiChain.ThenFunc(s.handleUnload))
 	mux.Handle("GET /running", apiChain.ThenFunc(s.handleRunning))

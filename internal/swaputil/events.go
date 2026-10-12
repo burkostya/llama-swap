@@ -11,6 +11,7 @@ const ProfileChangedEventID = 0x08
 const ModelCapabilitiesChangedEventID = 0x09
 const ProcessLoadingEventID = 0x0A
 const InferencePausedEventID = 0x0B
+const ResourceStateChangeEventID = 0x0C
 
 // ProcessStateChangeEvent is emitted whenever a process transitions between
 // lifecycle states. States are carried as strings so this package stays a leaf
@@ -116,3 +117,14 @@ type InferencePausedEvent struct {
 func (e InferencePausedEvent) Type() uint32 {
 	return InferencePausedEventID
 }
+
+// ResourceStateChangeEvent reports ownership lifecycle without exposing env.
+type ResourceStateChangeEvent struct {
+	Model      string `json:"model"`
+	Generation uint64 `json:"generation"`
+	OldState   string `json:"oldState"`
+	NewState   string `json:"newState"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+func (ResourceStateChangeEvent) Type() uint32 { return ResourceStateChangeEventID }

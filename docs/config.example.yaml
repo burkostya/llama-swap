@@ -946,3 +946,30 @@ peers:
         provider:
           data_collection: "deny"
           zdr: true
+
+# Exclusive resource routing (opt-in, Linux only):
+# routing:
+#   router:
+#     use: resources
+#     settings:
+#       resources:
+#         stateDir: /var/lib/llama-swap/resources
+#         demandTimeout: 30s
+#         pools:
+#           gpu0:
+#             parameters: {device: GPU-uuid-0}
+#           gpu1:
+#             parameters: {device: GPU-uuid-1}
+# models:
+#   worker-a:
+#     cmd: worker-a --port ${PORT}
+#     activation: demand
+#     resources: [gpu0]
+#     env: ["WORKER_GPU=${RESOURCE:gpu0.device}"]
+#     drain: {signal: SIGTERM, target: process, timeout: 120s, onTimeout: block}
+#   worker-b:
+#     cmd: worker-b --port ${PORT}
+#     activation: demand
+#     resources: [gpu0, gpu1]
+# See guides/routing/resource-workers in the knowledge base for demand API,
+# graceful shutdown, crash recovery and generation-checked force-stop.

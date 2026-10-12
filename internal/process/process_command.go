@@ -108,9 +108,12 @@ type startResult struct {
 }
 
 type ProcessCommand struct {
-	id        string
-	config    config.ModelConfig
-	parentCtx context.Context
+	resourceForced    atomic.Bool
+	resourceIdentity  atomic.Pointer[ResourceIdentity]
+	resourceStopError atomic.Pointer[string]
+	id                string
+	config            config.ModelConfig
+	parentCtx         context.Context
 
 	processLogger *logmon.Monitor
 	proxyLogger   *logmon.Monitor
@@ -484,6 +487,11 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		return startResult{err: fmt.Errorf("unable to get sanitized command: %w", err)}
 	}
 
+	if p.config.ResourceManaged {
+		for i := range args {
+			args[i] = p.config.ResourceValue(args[i])
+		}
+	}
 	proxyURL, err := url.Parse(p.config.Proxy)
 	if err != nil {
 		return startResult{err: fmt.Errorf("invalid proxy URL %q: %w", p.config.Proxy, err)}
@@ -544,7 +552,13 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	cmd := exec.CommandContext(cmdCtx, args[0], args[1:]...)
 	cmd.Stderr = p.processLogger
 	cmd.Stdout = p.processLogger
-	cmd.Env = append(cmd.Environ(), p.config.Env...)
+	configuredEnv := append([]string(nil), p.config.Env...)
+	if p.config.ResourceManaged {
+		for i := range configuredEnv {
+			configuredEnv[i] = p.config.ResourceValue(configuredEnv[i])
+		}
+	}
+	cmd.Env = append(cmd.Environ(), configuredEnv...)
 	cmd.Cancel = func() error { return p.sendStopSignal(cmd) }
 	cmd.WaitDelay = p.waitDelay
 	setProcAttributes(cmd)
@@ -557,6 +571,11 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		return startResult{err: fmt.Errorf("failed to start command '%s': %w", strings.Join(args, " "), err)}
 	}
 
+	if p.config.ResourceManaged {
+		identity := readResourceIdentity(cmd.Process.Pid)
+		p.resourceIdentity.Store(&identity)
+		p.resourceStopError.Store(nil)
+	}
 	go func() {
 		waitErr := cmd.Wait()
 		switch st := p.State(); {
@@ -692,13 +711,25 @@ func (p *ProcessCommand) sendStopSignal(cmd *exec.Cmd) error {
 		)
 		if err == nil {
 			p.processLogger.Debugf("<%s> sendStopSignal() running stop command: %s", p.id, strings.Join(stopArgs, " "))
+			if p.config.ResourceManaged {
+				for i := range stopArgs {
+					stopArgs[i] = p.config.ResourceValue(stopArgs[i])
+				}
+			}
 			stopCmd := exec.Command(stopArgs[0], stopArgs[1:]...)
-			stopCmd.Stderr = p.processLogger
-			stopCmd.Stdout = p.processLogger
+			stopCmd.WaitDelay = p.waitDelay
 			// Bound the pipe copy so a CmdStop that backgrounds a child
 			// holding stdout/stderr cannot block Run() indefinitely.
-			stopCmd.WaitDelay = p.waitDelay
+			if p.config.ResourceManaged {
+				stopCtx, stopCancel := context.WithTimeout(context.Background(), p.config.Drain.Timeout)
+				defer stopCancel()
+				stopCmd = exec.CommandContext(stopCtx, stopArgs[0], stopArgs[1:]...)
+				stopCmd.Cancel = func() error { return killProcessTree(stopCmd) }
+				stopCmd.WaitDelay = time.Second
+			}
 			stopCmd.Env = cmd.Env
+			stopCmd.Stderr = p.processLogger
+			stopCmd.Stdout = p.processLogger
 			setProcAttributes(stopCmd)
 			runErr := stopCmd.Run()
 			// ErrWaitDelay is only returned when the stop command itself
@@ -716,6 +747,9 @@ func (p *ProcessCommand) sendStopSignal(cmd *exec.Cmd) error {
 		}
 		// fall through to SIGTERM if sanitize failed
 		p.processLogger.Errorf("<%s> sendStopSignal() failed to sanitize CmdStop %q: %v, falling back to terminateProcessTree", p.id, p.config.CmdStop, err)
+	}
+	if p.config.ResourceManaged {
+		return signalResourceProcess(cmd, p.config.Drain.Signal)
 	}
 	// On Unix this SIGTERMs the whole process group so a forked grandchild
 	// (e.g. a shell wrapper that backgrounds the real binary) is taken down
@@ -754,6 +788,16 @@ func (p *ProcessCommand) killProcess(cmd *exec.Cmd, cancel context.CancelFunc, c
 		return false
 	}
 	defer cancel()
+	if p.config.ResourceManaged {
+		go func() {
+			if err := p.sendStopSignal(cmd); err != nil {
+				msg := err.Error()
+				p.resourceStopError.Store(&msg)
+			}
+		}()
+		<-cmdDone
+		return p.resourceForced.Load()
+	}
 
 	// Deliver CmdStop / SIGTERM in a goroutine so a slow or hanging CmdStop
 	// cannot block the run() goroutine; the gracefulTimeout + Process.Kill

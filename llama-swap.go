@@ -351,6 +351,20 @@ func main() {
 			return
 		}
 
+		activeMu.RLock()
+		reloadServer := activeSrv
+		activeMu.RUnlock()
+		resumeResources, resourceErr := reloadServer.PrepareResourceReload(newCfg)
+		if resourceErr != nil {
+			proxyLog.Warnf("failed to reload config: %v", resourceErr)
+			return
+		}
+		replaced := false
+		defer func() {
+			if !replaced {
+				resumeResources()
+			}
+		}()
 		newStorePath := configStorePath(newCfg)
 		activeMu.RLock()
 		currentStore := activeStore
@@ -389,6 +403,7 @@ func main() {
 		old := activeSrv
 		oldStore := activeStore
 		activeSrv = newSrv
+		replaced = true
 		activeStore = newStore
 		activeStorePath = newStorePath
 		activeMu.Unlock()
@@ -492,11 +507,16 @@ func main() {
 				// exit once the whole graceful sequence has had its full budget.
 				// On Windows the Job Object reaps upstream processes on exit, so
 				// a forced exit still cleans up rather than orphaning children.
-				go func() {
-					time.Sleep(shutdownTimeout + 5*time.Second)
-					proxyLog.Warnf("graceful shutdown exceeded %v, forcing exit", shutdownTimeout)
-					os.Exit(1)
-				}()
+				activeMu.RLock()
+				resourceShutdown := activeSrv.UsesResources()
+				activeMu.RUnlock()
+				if !resourceShutdown {
+					go func() {
+						time.Sleep(shutdownTimeout + 5*time.Second)
+						proxyLog.Warnf("graceful shutdown exceeded %v, forcing exit", shutdownTimeout)
+						os.Exit(1)
+					}()
+				}
 
 				activeMu.RLock()
 				srv := activeSrv
@@ -507,6 +527,11 @@ func main() {
 				// Close long-lived SSE streams first so httpServer.Shutdown can
 				// drain without blocking on them for the full timeout.
 				srv.CloseStreams()
+				if resourceShutdown {
+					if err := srv.DrainResources(); err != nil {
+						proxyLog.Warnf("resource drain error: %v", err)
+					}
+				}
 
 				// Both phases share a single deadline so total shutdown is
 				// bounded by shutdownTimeout rather than 2x it.
