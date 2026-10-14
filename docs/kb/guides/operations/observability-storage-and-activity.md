@@ -56,6 +56,8 @@ Click a non-empty Session ID to open all recorded requests and statistics for
 that ID across models. The Activity and stats APIs accept the same exact-match
 filter as `session_id`; for example, `/api/metrics/activity?session_id=chat-42`
 and `/api/metrics/stats?session_id=chat-42`.
+Session statistics count retained matching requests. Overall and model request
+totals keep upstream's behavior of retaining the last request ID after pruning.
 
 ```yaml
 ui:
@@ -64,6 +66,8 @@ ui:
 ```
 
 Upgrading from either the earlier fork or upstream preserves Activity rows.
-Migration 3 reconciles their different migration-2 schemas and adds missing
-columns with empty defaults. Back up the SQLite database before deployment;
-schema downgrade requires restoring that backup.
+Migration 4 reconciles their different version-2 and version-3 schemas: it adds
+missing source and session columns with empty defaults and creates the cache
+table if the earlier fork's version 3 skipped it. Existing cache entries are
+preserved. Back up the SQLite database before deployment; schema downgrade
+requires restoring that backup.

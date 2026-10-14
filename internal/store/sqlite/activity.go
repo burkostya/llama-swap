@@ -138,6 +138,7 @@ func (r *activityRepository) Stats(ctx context.Context, query store.ActivityStat
 	where, args := activityWhere(filter)
 	totalExpr := "COALESCE(MAX(id), 0)"
 	if query.SessionID != "" {
+		// IDs span all sessions; a session's total counts its retained rows.
 		totalExpr = "COUNT(*)"
 	}
 	row := r.db.QueryRowContext(ctx, `
@@ -257,7 +258,6 @@ func activityWhere(filter store.ActivityFilter) (string, []any) {
 	}
 
 	if !filter.Start.IsZero() {
-		// Time filters remain independent of the exact session match.
 		conditions = append(conditions, "ts_created >= ?")
 		args = append(args, filter.Start.Unix())
 	}

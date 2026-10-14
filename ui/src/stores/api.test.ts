@@ -71,6 +71,25 @@ describe("tailcat api", () => {
   });
 });
 
+describe("session activity behind a reverse proxy", () => {
+  it("prefixes both activity and stats URLs while preserving the exact session ID", async () => {
+    vi.stubGlobal("window", { location: { pathname: "/tenant/llama-swap/ui/" } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+
+    await getActivity({ sessionID: "tenant/a + b", page: 2 });
+    await getActivityStats("model one", "tenant/a + b");
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/tenant/llama-swap/api/metrics/activity?session_id=tenant%2Fa+%2B+b&page=2"
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/tenant/llama-swap/api/metrics/stats?model=model+one&session_id=tenant%2Fa+%2B+b"
+    );
+  });
+});
+
 describe("hardware api", () => {
   it("fetches the hardware snapshot", async () => {
     const snapshot = {

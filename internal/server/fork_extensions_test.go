@@ -11,7 +11,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/fork/extension"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/store"
+	"github.com/mostlygeek/llama-swap/internal/store/sqlite"
 )
 
 func TestServer_ExtensionControlAuthenticationAndPlainConstruction(t *testing.T) {
@@ -25,17 +25,17 @@ func TestServer_ExtensionControlAuthenticationAndPlainConstruction(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			st, err := store.New("")
+			st, err := sqlite.New("")
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { st.Close() })
-			logger := logmon.NewWriter(io.Discard)
+			logs := logmon.NewGroup(io.Discard, true, true, true)
 			var opts []Option
 			if enabled {
 				opts = append(opts, WithExtensionRegistry(extension.NewRegistry()))
 			}
-			srv, err := New(cfg, logger, logger, logger, nil, st, BuildInfo{}, nil, nil, opts...)
+			srv, err := New(cfg, logs, nil, st, BuildInfo{}, nil, nil, opts...)
 			if err != nil {
 				t.Fatal(err)
 			}
