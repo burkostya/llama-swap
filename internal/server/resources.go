@@ -109,7 +109,7 @@ func (s *Server) PrepareResourceReload(cfg config.Config) (func(), error) {
 	}
 	return func() {
 		if err := resources.ResumeReload(); err != nil {
-			s.proxylog.Warnf("resources: cannot resume after rejected reload: %v", err)
+			s.logs.ProxyLogs.Warnf("resources: cannot resume after rejected reload: %v", err)
 		}
 	}, nil
 }

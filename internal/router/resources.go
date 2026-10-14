@@ -653,19 +653,49 @@ func (r *Resources) ProcessLogger(id string) (*logmon.Monitor, bool) {
 	return v.log, v.ok
 }
 func (r *Resources) RunningModels() map[string]process.ProcessState {
-	status := r.Snapshot()
 	result := map[string]process.ProcessState{}
-	for id, b := range status.Backends {
-		switch b.State {
-		case "starting":
-			result[id] = process.StateStarting
-		case "ready":
-			result[id] = process.StateReady
-		case "draining", "blocked":
-			result[id] = process.StateStopping
-		}
+	for id, st := range r.RunningStatus() {
+		result[id] = st.State
 	}
 	return result
+}
+
+// RunningStatus snapshots coordinator ownership and upstream process details
+// together. Recovered owners can be blocked even without a process instance.
+func (r *Resources) RunningStatus() map[string]process.Status {
+	reply := make(chan map[string]process.Status, 1)
+	if !r.submit(func() {
+		result := map[string]process.Status{}
+		for id, b := range r.backends {
+			var state process.ProcessState
+			switch b.state {
+			case "starting":
+				state = process.StateStarting
+			case "ready":
+				state = process.StateReady
+			case "draining", "blocked":
+				state = process.StateStopping
+			default:
+				continue
+			}
+			st := process.Status{}
+			if b.p != nil {
+				st = b.p.Status()
+			}
+			st.State = state
+			if state != process.StateReady {
+				st.ReadySince = time.Time{}
+			}
+			if state != process.StateStarting {
+				st.Loading = nil
+			}
+			result[id] = st
+		}
+		reply <- result
+	}) {
+		return map[string]process.Status{}
+	}
+	return <-reply
 }
 
 func (r *Resources) ServeHTTP(w http.ResponseWriter, req *http.Request) {

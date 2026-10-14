@@ -38,6 +38,7 @@ type resourceFake struct {
 	serveStarted  chan struct{}
 	serveOnce     sync.Once
 	logger        *logmon.Monitor
+	reported      atomic.Pointer[process.Status]
 }
 
 func newResourceFake() *resourceFake {
@@ -70,6 +71,12 @@ func (p *resourceFake) Stop(time.Duration) error {
 	return nil
 }
 func (p *resourceFake) State() process.ProcessState { return p.state.Load().(process.ProcessState) }
+func (p *resourceFake) Status() process.Status {
+	if st := p.reported.Load(); st != nil {
+		return *st
+	}
+	return process.Status{State: p.State()}
+}
 func (p *resourceFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.serveOnce.Do(func() { close(p.serveStarted) })
 	if p.serveGate != nil {
@@ -191,6 +198,49 @@ func resourceAdvance(r *Resources, delta time.Duration) {
 	done := make(chan struct{})
 	r.submit(func() { now := r.now().Add(delta); r.now = func() time.Time { return now }; r.tick(now); close(done) })
 	<-done
+}
+
+func TestResources_RunningStatusPreservesUpstreamDetails(t *testing.T) {
+	p := newResourceFake()
+	p.startGate = make(chan struct{})
+	progress := 0.5
+	p.reported.Store(&process.Status{
+		State:   process.StateStarting,
+		Loading: &process.LoadingProgress{Progress: &progress, Message: "loading weights"},
+	})
+	f := &resourceFactory{models: map[string][]*resourceFake{}, newProcess: func(string) *resourceFake { return p }}
+	r := resourceTestRouter(t, resourceTestConfig(t, resourceModels), f)
+	// Release startup even when an assertion below fails, before router cleanup.
+	t.Cleanup(func() {
+		select {
+		case <-p.startGate:
+		default:
+			close(p.startGate)
+		}
+	})
+	resourceDemand(t, r, "a", "main", true)
+	resourceAwait(t, r, "a", "starting")
+	st := r.RunningStatus()["a"]
+	if st.State != process.StateStarting || st.Loading == nil || st.Loading.Progress == nil || *st.Loading.Progress != progress || st.Loading.Message != "loading weights" || !st.ReadySince.IsZero() {
+		t.Fatalf("loading snapshot = %+v", st)
+	}
+	readySince := time.Now()
+	p.reported.Store(&process.Status{State: process.StateReady, ReadySince: readySince})
+	close(p.startGate)
+	resourceAwait(t, r, "a", "ready")
+	st = r.RunningStatus()["a"]
+	if st.State != process.StateReady || !st.ReadySince.Equal(readySince) || st.Loading != nil {
+		t.Fatalf("ready snapshot = %+v", st)
+	}
+	if r.RunningModels()["a"] != st.State {
+		t.Fatal("RunningModels disagrees with RunningStatus")
+	}
+	resourceDemand(t, r, "a", "main", false)
+	resourceAwait(t, r, "a", "draining")
+	st = r.RunningStatus()["a"]
+	if st.State != process.StateStopping || !st.ReadySince.IsZero() || st.Loading != nil {
+		t.Fatalf("draining snapshot = %+v", st)
+	}
 }
 
 func TestResources_DeduplicateAndWithdrawSources(t *testing.T) {

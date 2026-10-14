@@ -38,6 +38,7 @@ func (p *apiResourceProcess) Stop(time.Duration) error {
 func (p *apiResourceProcess) State() process.ProcessState {
 	return p.state.Load().(process.ProcessState)
 }
+func (p *apiResourceProcess) Status() process.Status                         { return process.Status{State: p.State()} }
 func (*apiResourceProcess) ServeHTTP(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }
 func (p *apiResourceProcess) Logger() *logmon.Monitor                        { return p.logger }
 func (*apiResourceProcess) ResourceIdentity() *process.ResourceIdentity      { return nil }
