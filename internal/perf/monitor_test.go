@@ -317,15 +317,25 @@ func newGpuTestMonitor(t *testing.T, f *fakeGpuCollector) (*Monitor, chan []GpuS
 	return m, gpuCh
 }
 
-func waitGpuStat(t *testing.T, gpuCh chan []GpuStat, wantID int) {
+func waitGpuStat(t *testing.T, m *Monitor, gpuCh chan []GpuStat, wantID int) {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
+	poll := time.NewTicker(5 * time.Millisecond)
+	defer poll.Stop()
 	for {
-		select {
-		case g := <-gpuCh:
-			if len(g) == 1 && g[0].ID == wantID {
+		// Fake restart waits advance immediately. Listener delivery is
+		// intentionally lossy, so later collectors can publish while an older
+		// sample still fills the one-slot subscription. The monitor history
+		// records every received sample before that best-effort fanout.
+		_, stats := m.Current()
+		for _, stat := range stats {
+			if stat.ID == wantID {
 				return
 			}
+		}
+		select {
+		case <-gpuCh:
+		case <-poll.C:
 		case <-deadline:
 			t.Fatalf("timed out waiting for GPU stats from collector %d", wantID)
 		}
@@ -340,8 +350,8 @@ func TestStart_RestartsGpuCollectorAfterItStops(t *testing.T) {
 	m.Start()
 	defer m.Stop()
 
-	waitGpuStat(t, gpuCh, 1)
-	waitGpuStat(t, gpuCh, 2)
+	waitGpuStat(t, m, gpuCh, 1)
+	waitGpuStat(t, m, gpuCh, 2)
 	assert.Equal(t, 2, f.callCount())
 }
 
@@ -356,8 +366,8 @@ func TestStart_RetriesWhenGpuCollectorRestartFails(t *testing.T) {
 	m.Start()
 	defer m.Stop()
 
-	waitGpuStat(t, gpuCh, 1)
-	waitGpuStat(t, gpuCh, 4)
+	waitGpuStat(t, m, gpuCh, 1)
+	waitGpuStat(t, m, gpuCh, 4)
 	assert.Equal(t, 4, f.callCount())
 }
 
@@ -366,7 +376,7 @@ func TestStart_GpuCollectorNotRestartedAfterStop(t *testing.T) {
 	m, gpuCh := newGpuTestMonitor(t, f)
 
 	m.Start()
-	waitGpuStat(t, gpuCh, 1)
+	waitGpuStat(t, m, gpuCh, 1)
 	m.Stop()
 
 	// several restart delays
@@ -401,8 +411,8 @@ func TestStart_GpuRestartWaitDoublesUpToMax(t *testing.T) {
 	m.Start()
 	defer m.Stop()
 
-	waitGpuStat(t, gpuCh, 1)
-	waitGpuStat(t, gpuCh, 6)
+	waitGpuStat(t, m, gpuCh, 1)
+	waitGpuStat(t, m, gpuCh, 6)
 	assert.Equal(t, []time.Duration{
 		5 * time.Second,
 		10 * time.Second,
@@ -425,11 +435,9 @@ func TestStart_GpuRestartWaitResetsAfterStats(t *testing.T) {
 	m.Start()
 	defer m.Stop()
 
-	// Collector 4's single sample can be dropped if collector 1's is still
-	// unread, so wait only for collector 6, which keeps reporting. The wait
-	// resets because the monitor received collector 4's stats, whether or
-	// not this listener saw them.
-	waitGpuStat(t, gpuCh, 6)
+	waitGpuStat(t, m, gpuCh, 1)
+	waitGpuStat(t, m, gpuCh, 4)
+	waitGpuStat(t, m, gpuCh, 6)
 	assert.Equal(t, []time.Duration{
 		5 * time.Second,
 		10 * time.Second,
@@ -449,7 +457,7 @@ func TestStart_StopDuringRestartWaitEndsCollector(t *testing.T) {
 	m, gpuCh := newGpuTestMonitor(t, f)
 
 	m.Start()
-	waitGpuStat(t, gpuCh, 1)
+	waitGpuStat(t, m, gpuCh, 1)
 	select {
 	case <-f.waiting:
 	case <-time.After(2 * time.Second):
