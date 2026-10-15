@@ -133,11 +133,13 @@ type CompatConfig struct {
 }
 
 type ModelConfig struct {
-	Activation         string            `yaml:"activation"`
-	Resources          []string          `yaml:"resources"`
-	Drain              DrainConfig       `yaml:"drain"`
-	ResourceManaged    bool              `yaml:"-" json:"-"`
-	ResourceParameters map[string]string `yaml:"-" json:"-"`
+	Activation          string            `yaml:"activation"`
+	Resources           []string          `yaml:"resources"`
+	Drain               DrainConfig       `yaml:"drain"`
+	ResourceManaged     bool              `yaml:"-" json:"-"`
+	ResourceParameters  map[string]string `yaml:"-" json:"-"`
+	ResourceEnvironment []string          `yaml:"-" json:"-"`
+	Runtime             *RuntimeConfig    `yaml:"runtime" json:"runtime,omitempty"`
 
 	Cmd           string   `yaml:"cmd"`
 	CmdStop       string   `yaml:"cmdStop"`

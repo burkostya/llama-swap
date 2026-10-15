@@ -17,6 +17,7 @@ type resourceOwner struct {
 	Generation uint64                    `json:"generation"`
 	Resources  []string                  `json:"resources"`
 	Identity   *process.ResourceIdentity `json:"identity,omitempty"`
+	Runtime    *resourceRuntimeIdentity  `json:"runtime,omitempty"`
 }
 
 type resourceLedger struct {
@@ -62,7 +63,11 @@ func openResourceLedger(dir string) (*resourceLedger, error) {
 		if owner.Generation > l.NextGeneration {
 			l.NextGeneration = owner.Generation
 		}
-		if owner.Identity != nil {
+		if owner.Runtime != nil && (owner.Runtime.Type != "docker" || owner.Runtime.Model != id || owner.Runtime.Generation != owner.Generation || !filepath.IsAbs(owner.Runtime.Command) || owner.Runtime.Name == "") {
+			l.close()
+			return nil, fmt.Errorf("invalid Docker reservation for %q", id)
+		}
+		if owner.Identity != nil && owner.Runtime == nil {
 			exited, err := process.ResourceGroupExited(*owner.Identity)
 			if err == nil && exited {
 				delete(l.Owners, id)

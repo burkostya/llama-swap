@@ -805,6 +805,27 @@
                             }
                         },
                         "additionalProperties": false
+                    },
+                    "runtime": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": [
+                                    "docker"
+                                ]
+                            },
+                            "command": {
+                                "type": "string",
+                                "description": "Absolute Docker CLI path using the same daemon/context as the foreground runner."
+                            }
+                        },
+                        "required": [
+                            "type",
+                            "command"
+                        ],
+                        "additionalProperties": false,
+                        "description": "Optional Docker runtime ownership fence in Linux resources mode. Requires matching reserved container name and generation labels."
                     }
                 }
             }

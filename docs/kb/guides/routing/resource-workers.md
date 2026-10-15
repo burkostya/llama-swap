@@ -3,8 +3,8 @@ title: Exclusive resources and polling workers
 summary: Start generic polling workers from demand heartbeats and hand exclusive resources over only after confirmed graceful shutdown.
 category: guides
 tags: [resources, gpu, worker, queue, demand, graceful, shutdown]
-config_keys: [routing.router.use, routing.router.settings.resources, models.*.activation, models.*.resources, models.*.drain]
-updated: 2026-10-12
+config_keys: [routing.router.use, routing.router.settings.resources, models.*.activation, models.*.resources, models.*.drain, models.*.runtime]
+updated: 2026-10-15
 ---
 
 # Exclusive resources and polling workers
@@ -115,3 +115,56 @@ Reload is rejected while owners or queued work exist. Changes to/from resource
 mode require a restart. Empty resource routers support a fenced reload without
 two servers admitting work simultaneously. Demand/queued requests are not
 persisted; main applications re-report after restart.
+
+
+## Docker workloads
+
+A Docker container belongs to the daemon and may survive its foreground CLI.
+Use the optional runtime fence for container-backed resource models:
+
+```yaml
+models:
+  container-worker:
+    cmd: /path/to/foreground-container-runner --port ${PORT}
+    cmdStop: /path/to/request-container-drain
+    activation: demand
+    resources: [gpu0]
+    runtime:
+      type: docker
+      command: /run/current-system/sw/bin/docker
+```
+
+Keep the resources routing settings and pool from the first example. The runner
+must use the supervisor-provided environment:
+
+- `LLAMA_SWAP_RESOURCE_MODEL` and `LLAMA_SWAP_RESOURCE_GENERATION` identify this
+  activation; they are supplied for every resource backend, including processes.
+- `LLAMA_SWAP_CONTAINER_NAME` is the reserved, unique container name.
+- `LLAMA_SWAP_CONTAINER_LABEL_MODEL` and
+  `LLAMA_SWAP_CONTAINER_LABEL_GENERATION` are complete `key=value` label arguments.
+
+Pass the last three values as `docker run --name "$LLAMA_SWAP_CONTAINER_NAME"
+--label "$LLAMA_SWAP_CONTAINER_LABEL_MODEL" --label
+"$LLAMA_SWAP_CONTAINER_LABEL_GENERATION" ...`. Use a foreground command, disable
+Docker restart policy, and keep the runner alive until the container exits.
+These five environment keys cannot be overridden in model `env`; inherited
+values are replaced by supervisor-owned values. The Docker CLI and runner must
+use the same daemon/context and credentials. The daemon identity is recorded;
+a changed daemon/context blocks ownership rather than proving absence.
+
+The drain command should send `docker kill --signal=TERM
+"$LLAMA_SWAP_CONTAINER_NAME"` and let the worker finish. Do not use `docker stop`
+with its automatic kill timeout. Returning from that command or exiting the
+foreground CLI never releases resources by itself. The coordinator reserves
+name and generation before launching the runner, records the exact container
+ID after inspecting matching name and labels, and requires both process-group
+exit and a fresh Docker proof of stopped/absent state before the next owner.
+
+Daemon queries run asynchronously with bounded command timeouts. Daemon errors,
+wrong IDs/labels, an unconfirmed creation, and nonterminal container states keep
+the owner blocked. A container removed before its ID was observed cannot be
+silently treated as a failed creation: operator verification is required.
+Recovery checks the saved Docker reservation even if the previous CLI process
+group has disappeared. It neither adopts nor automatically kills old containers.
+The generation-checked force-stop API explicitly kills the verified container
+and its managed process group; release still requires confirmed termination.
