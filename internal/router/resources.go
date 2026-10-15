@@ -29,23 +29,27 @@ type Resources struct {
 	now              func() time.Time
 	closing, frozen  bool
 	storageError     string
+	runtimeCommand   resourceRuntimeCommand
 }
 
 type resourceBackend struct {
-	id                            string
-	cfg                           config.ModelConfig
-	state, reason                 string
-	generation                    uint64
-	p                             process.ResourceProcess
-	cancel                        context.CancelFunc
-	identity                      *process.ResourceIdentity
-	sources                       map[string]time.Time
-	waiters                       []*resourceWaiter
-	queued                        bool
-	inflight                      int
-	startDone, stopDone, stopSent bool
-	startAt, drainAt, lastUse     time.Time
-	recovered                     bool
+	id                                                                    string
+	cfg                                                                   config.ModelConfig
+	state, reason                                                         string
+	generation                                                            uint64
+	p                                                                     process.ResourceProcess
+	cancel                                                                context.CancelFunc
+	identity                                                              *process.ResourceIdentity
+	sources                                                               map[string]time.Time
+	waiters                                                               []*resourceWaiter
+	queued                                                                bool
+	inflight                                                              int
+	startDone, stopDone, stopSent                                         bool
+	startAt, drainAt, lastUse                                             time.Time
+	recovered                                                             bool
+	runtime                                                               *resourceRuntimeIdentity
+	runtimePending, runtimeReleased, processExitedConfirmed, forcePending bool
+	runtimeNextCheck                                                      time.Time
 }
 
 type resourceWaiter struct {
@@ -65,14 +69,15 @@ type ResourceDemand struct {
 	HasWork bool   `json:"hasWork"`
 }
 type ResourceBackendStatus struct {
-	Model         string               `json:"model"`
-	Generation    uint64               `json:"generation"`
-	State         string               `json:"state"`
-	Reason        string               `json:"reason,omitempty"`
-	QueuePosition int                  `json:"queuePosition,omitempty"`
-	Resources     []string             `json:"resources"`
-	Sources       map[string]time.Time `json:"sources"`
-	Inflight      int                  `json:"inflight"`
+	Model         string                   `json:"model"`
+	Generation    uint64                   `json:"generation"`
+	State         string                   `json:"state"`
+	Reason        string                   `json:"reason,omitempty"`
+	QueuePosition int                      `json:"queuePosition,omitempty"`
+	Resources     []string                 `json:"resources"`
+	Sources       map[string]time.Time     `json:"sources"`
+	Inflight      int                      `json:"inflight"`
+	Runtime       *resourceRuntimeIdentity `json:"runtime,omitempty"`
 }
 type ResourcePoolStatus struct {
 	Owner      string            `json:"owner,omitempty"`
@@ -101,6 +106,7 @@ func NewResources(cfg config.Config, logger, upstream *logmon.Monitor, opts ...O
 		return nil, err
 	}
 	r := &Resources{cfg: cfg, factory: resolved.processFactory, logger: logger, upstream: upstream, ledger: l, backends: map[string]*resourceBackend{}, ops: make(chan func()), done: make(chan struct{}), now: time.Now}
+	r.runtimeCommand = runResourceRuntimeCommand
 	for id, c := range cfg.Models {
 		r.backends[id] = &resourceBackend{id: id, cfg: c, state: "stopped", sources: map[string]time.Time{}}
 	}
@@ -115,6 +121,7 @@ func NewResources(cfg config.Config, logger, upstream *logmon.Monitor, opts ...O
 		b.generation = owner.Generation
 		b.identity = owner.Identity
 		b.recovered = true
+		b.runtime = owner.Runtime
 		// The old claim, rather than a changed configuration, defines which
 		// devices remain unavailable after restart.
 		b.cfg.Resources = append([]string(nil), owner.Resources...)
@@ -289,11 +296,25 @@ func (r *Resources) start(b *resourceBackend) {
 	b.stopSent = false
 	b.recovered = false
 	b.identity = nil
+	b.runtime = nil
+	b.runtimePending = false
+	b.runtimeReleased = false
+	b.processExitedConfirmed = false
+	b.forcePending = false
+	b.runtimeNextCheck = time.Time{}
 	b.drainAt = time.Time{}
 	b.startAt = r.now()
 	r.ledger.NextGeneration++
 	b.generation = r.ledger.NextGeneration
-	r.ledger.Owners[b.id] = resourceOwner{Model: b.id, Generation: b.generation, Resources: append([]string(nil), b.cfg.Resources...)}
+	if b.cfg.Runtime != nil {
+		identity, err := newResourceRuntime(b.cfg.Runtime.Command, b.id, b.generation)
+		if err != nil {
+			r.failWaiters(b, err.Error())
+			return
+		}
+		b.runtime = identity
+	}
+	r.ledger.Owners[b.id] = resourceOwner{Model: b.id, Generation: b.generation, Resources: append([]string(nil), b.cfg.Resources...), Runtime: b.runtime}
 	if !r.persist() {
 		r.setState(b, "blocked", "reservation could not be persisted")
 		return
@@ -302,11 +323,16 @@ func (r *Resources) start(b *resourceBackend) {
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
 	pcfg := b.cfg
+	pcfg.ResourceEnvironment = []string{"LLAMA_SWAP_RESOURCE_MODEL=" + b.id, "LLAMA_SWAP_RESOURCE_GENERATION=" + fmt.Sprint(b.generation)}
+	if b.runtime != nil {
+		pcfg.ResourceEnvironment = append(pcfg.ResourceEnvironment, b.runtime.environment()...)
+	}
 	pcfg.UnloadAfter = 0 // TTL is an admission event, never a process-local bypass.
 	p, err := r.factory.New(ctx, b.id, pcfg, logmon.NewWriter(r.upstream), r.logger)
 	if err != nil {
 		cancel()
 		b.startDone = true
+		b.runtime = nil // the factory failed before any runner could execute
 		r.failWaiters(b, err.Error())
 		r.release(b, err.Error())
 		return
@@ -315,6 +341,7 @@ func (r *Resources) start(b *resourceBackend) {
 	if !ok {
 		cancel()
 		b.startDone = true
+		b.runtime = nil
 		r.failWaiters(b, "process factory does not support managed resources")
 		r.release(b, "process factory does not support managed resources")
 		return
@@ -345,6 +372,12 @@ func (r *Resources) start(b *resourceBackend) {
 }
 
 func (r *Resources) release(b *resourceBackend, reason string) {
+	if b.runtime != nil && !b.runtimeReleased {
+		if b.state != "blocked" {
+			r.setState(b, "blocked", "waiting for confirmed Docker container termination")
+		}
+		return
+	}
 	owner, exists := r.ledger.Owners[b.id]
 	if !exists {
 		return
@@ -362,6 +395,7 @@ func (r *Resources) release(b *resourceBackend, reason string) {
 	b.p = nil
 	b.identity = nil
 	b.recovered = false
+	b.runtime = nil
 	b.inflight = 0
 	r.setState(b, "stopped", reason)
 	// Demand heartbeats that predate this exit do not automatically restart
@@ -370,6 +404,7 @@ func (r *Resources) release(b *resourceBackend, reason string) {
 
 func (r *Resources) tick(now time.Time) {
 	for _, b := range r.backends {
+		r.checkRuntime(b)
 		for source, expires := range b.sources {
 			if !now.Before(expires) {
 				delete(b.sources, source)
@@ -408,11 +443,13 @@ func (r *Resources) tick(now time.Time) {
 			}
 			if b.startDone && (b.p.State() == process.StateStopped || leaderExited) {
 				if b.identity == nil {
+					b.processExitedConfirmed = true
 					r.release(b, b.reason)
 					continue
 				}
 				exited, err := process.ResourceGroupExited(*b.identity)
 				if err == nil && exited {
+					b.processExitedConfirmed = true
 					r.release(b, b.reason)
 					continue
 				}
@@ -425,6 +462,7 @@ func (r *Resources) tick(now time.Time) {
 		}
 		if b.recovered && b.identity != nil {
 			if exited, err := process.ResourceGroupExited(*b.identity); err == nil && exited {
+				b.processExitedConfirmed = true
 				r.release(b, "recovered owner exited")
 				continue
 			}
@@ -502,6 +540,10 @@ func (r *Resources) statusBackend(b *resourceBackend) ResourceBackendStatus {
 		sources[id] = t
 	}
 	status := ResourceBackendStatus{Model: b.id, Generation: b.generation, State: b.state, Reason: b.reason, Resources: append([]string{}, b.cfg.Resources...), Sources: sources, Inflight: b.inflight}
+	if b.runtime != nil {
+		runtime := *b.runtime
+		status.Runtime = &runtime
+	}
 	position := 0
 	for _, id := range r.queue {
 		if r.backends[id].queued {
@@ -614,10 +656,18 @@ func (r *Resources) ForceStop(id string, generation uint64) error {
 			}
 		}
 		if b.identity == nil {
+			if b.runtime != nil {
+				r.forceRuntime(b, reply)
+				return
+			}
 			reply <- fmt.Errorf("owner identity is unconfirmed; operator verification is required")
 			return
 		}
 		r.beginDrain(b, "explicit force-stop")
+		if b.runtime != nil {
+			r.forceRuntime(b, reply)
+			return
+		}
 		identity := *b.identity
 		// The actor serializes generation validation with the signal. Killing
 		// is a short syscall; waiting and resource release remain asynchronous.

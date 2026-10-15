@@ -12,6 +12,7 @@ type resourceOwner struct {
 	Generation uint64
 	Resources  []string
 	Identity   *process.ResourceIdentity
+	Runtime    *resourceRuntimeIdentity
 }
 type resourceLedger struct {
 	NextGeneration uint64
