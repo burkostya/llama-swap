@@ -78,3 +78,24 @@ func TestResources_ConfigValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestResources_DockerRuntimeConfiguration(t *testing.T) {
+	valid := strings.Replace(resourceConfigFixture, "activation: demand", "activation: demand\n    runtime: {type: docker, command: /absolute/docker}", 1)
+	if _, err := LoadConfigFromReader(strings.NewReader(valid)); err != nil {
+		t.Fatal(err)
+	}
+	cases := []string{
+		strings.Replace(valid, "/absolute/docker", "docker", 1),
+		strings.Replace(valid, "type: docker", "type: unknown", 1),
+		strings.Replace(valid, "type: docker,", "type: docker, typo: 1,", 1),
+		strings.Replace(valid, "use: resources", "use: group", 1),
+	}
+	for _, key := range ResourceReservedEnvironment {
+		cases = append(cases, strings.Replace(valid, `env: ["DEVICE=${RESOURCE:gpu0.device}"]`, `env: ["`+key+`=forged"]`, 1))
+	}
+	for _, body := range cases {
+		if _, err := LoadConfigFromReader(strings.NewReader(body)); err == nil {
+			t.Fatalf("invalid runtime accepted: %s", body)
+		}
+	}
+}

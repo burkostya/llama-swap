@@ -559,6 +559,23 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		}
 	}
 	cmd.Env = append(cmd.Environ(), configuredEnv...)
+	if p.config.ResourceManaged {
+		filtered := cmd.Env[:0]
+		for _, env := range cmd.Env {
+			key, _, _ := strings.Cut(env, "=")
+			reserved := false
+			for _, name := range config.ResourceReservedEnvironment {
+				if name == key {
+					reserved = true
+					break
+				}
+			}
+			if !reserved {
+				filtered = append(filtered, env)
+			}
+		}
+		cmd.Env = append(filtered, p.config.ResourceEnvironment...)
+	}
 	cmd.Cancel = func() error { return p.sendStopSignal(cmd) }
 	cmd.WaitDelay = p.waitDelay
 	setProcAttributes(cmd)
