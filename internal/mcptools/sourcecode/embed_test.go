@@ -13,7 +13,10 @@ import (
 
 func TestSourceCode_EmbeddedSource(t *testing.T) {
 	require.NotNil(t, Embedded)
-	for _, want := range []string{"llama-swap.go", "internal/mcptools/sourcecode/index.go", "ui/src/App.svelte"} {
+	for _, want := range []string{
+		"llama-swap.go", "internal/mcptools/sourcecode/index.go", "ui/src/App.svelte",
+		"internal/router/resources.go", "internal/fork/extensions/llamacppsession/extension.go",
+	} {
 		_, err := fs.Stat(Embedded, want)
 		assert.NoError(t, err, want)
 	}

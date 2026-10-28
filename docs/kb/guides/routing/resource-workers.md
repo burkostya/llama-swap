@@ -77,6 +77,21 @@ guarantee a number of jobs per activation. Workers must handle drain arriving
 immediately after startup. After a victim exits, only a fresh `true` report or
 new HTTP activation requeues it; old demand cannot create a restart loop.
 
+## Pause workers
+
+`POST /api/models/pause` rejects new local inference and demand heartbeats
+with HTTP 503, clears queued work and prior demand, and gracefully drains every
+worker. The pause response waits until each process group and any Docker
+container have stopped and their ownership is released. A long-running or
+blocked worker can therefore keep the pause request open. `GET /api/resources`
+remains available to inspect it, and the generation-checked force-stop below
+can be used when appropriate. Resources are never released just because the
+drain timeout expires.
+
+`POST /api/models/resume` waits for a pending pause to finish. After resume,
+send a fresh `hasWork: true` heartbeat (or a new HTTP request for a worker
+configured for request activation); demand from before pause is not replayed.
+
 ## Graceful completion and troubleshooting
 
 The default signal is SIGTERM to the main process, leaving child calculations

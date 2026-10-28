@@ -7,22 +7,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/mostlygeek/llama-swap/internal/fork/extension"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/process"
 	"github.com/mostlygeek/llama-swap/internal/router"
 )
 
 type apiResourceProcess struct {
-	state  atomic.Value
-	logger *logmon.Monitor
+	state       atomic.Value
+	logger      *logmon.Monitor
+	stopGate    <-chan struct{}
+	stopStarted chan struct{}
+	stopOnce    sync.Once
 }
 
 func (p *apiResourceProcess) EnsureReady(context.Context, time.Duration) error {
@@ -32,6 +38,12 @@ func (p *apiResourceProcess) EnsureReady(context.Context, time.Duration) error {
 func (p *apiResourceProcess) Run(time.Duration) error       { return p.EnsureReady(context.Background(), 0) }
 func (*apiResourceProcess) WaitReady(context.Context) error { return nil }
 func (p *apiResourceProcess) Stop(time.Duration) error {
+	if p.stopStarted != nil {
+		p.stopOnce.Do(func() { close(p.stopStarted) })
+	}
+	if p.stopGate != nil {
+		<-p.stopGate
+	}
 	p.state.Store(process.StateStopped)
 	return nil
 }
@@ -45,11 +57,15 @@ func (*apiResourceProcess) ResourceIdentity() *process.ResourceIdentity      { r
 func (*apiResourceProcess) ResourceStopError() string                        { return "" }
 func (p *apiResourceProcess) ForceResourceStop() error                       { return p.Stop(0) }
 
-type apiResourceFactory struct{ started atomic.Int32 }
+type apiResourceFactory struct {
+	started     atomic.Int32
+	stopGate    <-chan struct{}
+	stopStarted chan struct{}
+}
 
 func (f *apiResourceFactory) New(_ context.Context, _ string, _ config.ModelConfig, logger, _ *logmon.Monitor) (process.Process, error) {
 	f.started.Add(1)
-	p := &apiResourceProcess{logger: logger}
+	p := &apiResourceProcess{logger: logger, stopGate: f.stopGate, stopStarted: f.stopStarted}
 	p.state.Store(process.StateStopped)
 	return p, nil
 }
@@ -80,8 +96,147 @@ models:
 		t.Fatal(err)
 	}
 	s := newTestServerWithConfig(c, r, newStubRouter(nil, ""))
+	r.SetStartGate(s.pause.startGate)
 	t.Cleanup(func() { _ = r.Shutdown(0); s.store.Close(); s.shutdownFn() })
 	return s, r, f
+}
+
+func TestProxy_ResourcesPauseWaitsAndRejectsDemand(t *testing.T) {
+	s, r, f := resourceAPIServer(t)
+	stopGate := make(chan struct{})
+	stopStarted := make(chan struct{})
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(stopGate) }) })
+	f.stopGate, f.stopStarted = stopGate, stopStarted
+	body := `{"model":"worker","source":"main","hasWork":true}`
+	if w := resourceAPIRequest(s, "PUT", "/api/resources/demand", body, "secret"); w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	pauseDone := make(chan *httptest.ResponseRecorder, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	request := httptest.NewRequest("POST", "/api/models/pause", nil).WithContext(ctx)
+	request.Header.Set("Authorization", "Bearer secret")
+	go func() {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, request)
+		pauseDone <- w
+	}()
+	select {
+	case <-stopStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pause did not begin worker stop")
+	}
+	cancel() // A disconnected client must not cancel drain or clear pause.
+	if !s.pause.Paused() {
+		t.Fatal("client cancellation cleared pause")
+	}
+	for _, work := range []string{"true", "false"} {
+		w := resourceAPIRequest(s, "PUT", "/api/resources/demand", `{"model":"worker","source":"main","hasWork":`+work+`}`, "secret")
+		if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "paused") {
+			t.Fatalf("demand while paused: status=%d body=%q", w.Code, w.Body.String())
+		}
+	}
+	if w := resourceAPIRequest(s, "PUT", "/api/resources/demand", `{}`, "secret"); w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid demand status=%d", w.Code)
+	}
+	if w := resourceAPIRequest(s, "PUT", "/api/resources/demand", body, ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized demand status=%d", w.Code)
+	}
+	if w := resourceAPIRequest(s, "GET", "/api/resources", "", "secret"); w.Code != http.StatusOK || r.Snapshot().Pools["gpu0"].Owner != "worker" {
+		t.Fatal("status unavailable or live owner released during pause")
+	}
+	resumeDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() { resumeDone <- resourceAPIRequest(s, "POST", "/api/models/resume", "", "secret") }()
+	select {
+	case <-pauseDone:
+		t.Fatal("pause returned before worker exit")
+	case <-resumeDone:
+		t.Fatal("resume returned before pause completed")
+	case <-time.After(30 * time.Millisecond):
+	}
+	release.Do(func() { close(stopGate) })
+	select {
+	case w := <-pauseDone:
+		if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"paused":true}` {
+			t.Fatalf("pause: status=%d body=%q", w.Code, w.Body.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pause did not finish")
+	}
+	select {
+	case w := <-resumeDone:
+		if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"paused":false}` {
+			t.Fatalf("resume: status=%d body=%q", w.Code, w.Body.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("resume did not finish")
+	}
+	if f.started.Load() != 1 {
+		t.Fatal("old demand restarted worker")
+	}
+	f.stopGate, f.stopStarted = nil, nil
+	if w := resourceAPIRequest(s, "PUT", "/api/resources/demand", body, "secret"); w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if f.started.Load() != 2 {
+		t.Fatal("fresh heartbeat did not restart worker")
+	}
+}
+
+func TestProxy_ResourcesPauseSurvivesReload(t *testing.T) {
+	s, _, _ := resourceAPIServer(t)
+	if w := resourceAPIRequest(s, "POST", "/api/models/pause", "", "secret"); w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	restore, err := s.PrepareResourceReload(s.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := New(s.cfg, s.logs, nil, s.store, BuildInfo{}, nil, nil, nil, s.pause)
+	if err != nil {
+		restore()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = replacement.Shutdown(time.Second) })
+	body := `{"model":"worker","source":"main","hasWork":true}`
+	if w := resourceAPIRequest(replacement, "PUT", "/api/resources/demand", body, "secret"); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "paused") {
+		t.Fatalf("reload lost pause: status=%d body=%q", w.Code, w.Body.String())
+	}
+	if w := resourceAPIRequest(replacement, "POST", "/api/models/resume", "", "secret"); w.Code != http.StatusOK || s.pause.Paused() {
+		t.Fatalf("resume after reload: status=%d body=%q", w.Code, w.Body.String())
+	}
+}
+
+func TestProxy_ResourcesPausedReloadFailureRestoresLedger(t *testing.T) {
+	s, _, f := resourceAPIServer(t)
+	if w := resourceAPIRequest(s, "POST", "/api/models/pause", "", "secret"); w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	restore, err := s.PrepareResourceReload(s.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := s.cfg
+	bad.Models = maps.Clone(s.cfg.Models)
+	model := bad.Models["worker"]
+	model.Extensions = []config.ExtensionConfig{{Name: "unknown", Type: "unknown"}}
+	bad.Models["worker"] = model
+	_, err = New(bad, s.logs, nil, s.store, BuildInfo{}, nil, nil, nil, s.pause, WithExtensionRegistry(extension.NewRegistry()))
+	if err == nil {
+		t.Fatal("invalid extension accepted during reload")
+	}
+	restore()
+	body := `{"model":"worker","source":"main","hasWork":true}`
+	if w := resourceAPIRequest(s, "PUT", "/api/resources/demand", body, "secret"); w.Code != http.StatusServiceUnavailable || !s.pause.Paused() {
+		t.Fatalf("failed reload lost pause: status=%d body=%q", w.Code, w.Body.String())
+	}
+	if w := resourceAPIRequest(s, "POST", "/api/models/resume", "", "secret"); w.Code != http.StatusOK {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w := resourceAPIRequest(s, "PUT", "/api/resources/demand", body, "secret"); w.Code != http.StatusOK || f.started.Load() != 1 {
+		t.Fatalf("failed reload did not restore ledger: status=%d body=%q", w.Code, w.Body.String())
+	}
 }
 func resourceAPIRequest(s *Server, method, path, body, key string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, strings.NewReader(body))

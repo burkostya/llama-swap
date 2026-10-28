@@ -46,11 +46,11 @@ type LocalRouter interface {
 	RunningStatus() map[string]process.Status
 
 	// Unload stops the named models, or every running model when none are
-	// named. It blocks until each targeted process has stopped. A timeout <= 0
-	// gives each process its configured unloadTimeout to stop gracefully:
-	// models sharing a timeout stop in parallel, smaller timeouts before
-	// larger ones. A positive timeout overrides the configured values for
-	// every target.
+	// named. Group, matrix, and capacity routers block until targeted processes
+	// have stopped. The resources router initiates a graceful drain and returns;
+	// ownership remains reserved until the process group and runtime have exited.
+	// For the other routers, a timeout <= 0 uses each model's unloadTimeout;
+	// a positive timeout overrides the configured values for every target.
 	Unload(timeout time.Duration, models ...string)
 
 	// ProcessLogger returns the log monitor for the named model's process.

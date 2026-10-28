@@ -200,6 +200,140 @@ func resourceAdvance(r *Resources, delta time.Duration) {
 	<-done
 }
 
+func TestResources_PauseDrainsOwnersAndRejectsDemand(t *testing.T) {
+	f := &resourceFactory{models: map[string][]*resourceFake{}}
+	r := resourceTestRouter(t, resourceTestConfig(t, resourceModels), f)
+	resourceDemand(t, r, "a", "main", true)
+	owner := resourceAwait(t, r, "a", "ready")
+	resourceDemand(t, r, "b", "queued", true)
+	resourceAwait(t, r, "a", "draining")
+
+	var paused atomic.Bool
+	paused.Store(true)
+	r.SetStartGate(func() error {
+		if paused.Load() {
+			return swaputil.ErrInferencePaused
+		}
+		return nil
+	})
+	drained := make(chan struct{})
+	go func() { r.DrainForPause(); close(drained) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(r.Snapshot().Queue) != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	snapshot := r.Snapshot()
+	if len(snapshot.Queue) != 0 || len(snapshot.Backends["a"].Sources) != 0 || len(snapshot.Backends["b"].Sources) != 0 {
+		t.Fatalf("pause retained queued work: %+v", snapshot)
+	}
+	for _, work := range []bool{true, false} {
+		_, code, err := r.Demand(ResourceDemand{Model: "b", Source: "queued", HasWork: work})
+		if code != http.StatusServiceUnavailable || err != swaputil.ErrInferencePaused {
+			t.Fatalf("demand while paused: code=%d err=%v", code, err)
+		}
+	}
+	resourceAdvance(r, 2*time.Second)
+	resourceAwait(t, r, "a", "blocked")
+	if err := r.ForceStop("a", owner.Generation+1); err == nil {
+		t.Fatal("stale generation accepted while paused")
+	}
+	select {
+	case <-drained:
+		t.Fatal("pause completed before owner exit")
+	default:
+	}
+	if r.Snapshot().Pools["gpu0"].Owner != "a" || f.latest("b") != nil {
+		t.Fatal("pause released a live owner or started queued work")
+	}
+	_ = f.latest("a").ForceResourceStop()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pause did not complete after confirmed exit")
+	}
+	paused.Store(false)
+	if f.latest("b") != nil || len(r.Snapshot().Queue) != 0 {
+		t.Fatal("old demand restarted a worker after resume")
+	}
+	resourceDemand(t, r, "a", "fresh", true)
+	newOwner := resourceAwait(t, r, "a", "ready")
+	if newOwner.Generation <= owner.Generation {
+		t.Fatalf("generation did not advance: before=%d after=%d", owner.Generation, newOwner.Generation)
+	}
+}
+
+func TestResources_PauseDuringStartup(t *testing.T) {
+	p := newResourceFake()
+	p.startGate = make(chan struct{})
+	f := &resourceFactory{models: map[string][]*resourceFake{}, newProcess: func(string) *resourceFake { return p }}
+	r := resourceTestRouter(t, resourceTestConfig(t, resourceModels), f)
+	t.Cleanup(func() {
+		select {
+		case <-p.startGate:
+		default:
+			close(p.startGate)
+		}
+	})
+	resourceDemand(t, r, "a", "main", true)
+	resourceAwait(t, r, "a", "starting")
+	r.SetStartGate(func() error { return swaputil.ErrInferencePaused })
+	drained := make(chan struct{})
+	go func() { r.DrainForPause(); close(drained) }()
+	resourceAwait(t, r, "a", "draining")
+	select {
+	case <-drained:
+		t.Fatal("pause returned during startup")
+	default:
+	}
+	close(p.startGate)
+	select {
+	case <-p.stopBegan:
+	case <-time.After(5 * time.Second):
+		t.Fatal("starting worker was not drained")
+	}
+	_ = p.ForceResourceStop()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pause did not wait for starting worker exit")
+	}
+}
+
+func TestResources_PauseRejectsQueuedHTTPRequest(t *testing.T) {
+	models := strings.Replace(resourceModels, "b: {cmd: b, proxy: http://127.0.0.1:5801, activation: demand", "b: {cmd: b, proxy: http://127.0.0.1:5801, activation: both", 1)
+	f := &resourceFactory{models: map[string][]*resourceFake{}}
+	r := resourceTestRouter(t, resourceTestConfig(t, models), f)
+	resourceDemand(t, r, "a", "main", true)
+	resourceAwait(t, r, "a", "ready")
+	response := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, newRequest("b"))
+		response <- w
+	}()
+	resourceAwait(t, r, "b", "queued")
+	r.SetStartGate(func() error { return swaputil.ErrInferencePaused })
+	drained := make(chan struct{})
+	go func() { r.DrainForPause(); close(drained) }()
+	select {
+	case w := <-response:
+		if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "paused") {
+			t.Fatalf("queued request: status=%d body=%q", w.Code, w.Body.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pause did not reject queued HTTP request")
+	}
+	if f.latest("b") != nil {
+		t.Fatal("queued HTTP request started a worker during pause")
+	}
+	_ = f.latest("a").ForceResourceStop()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pause did not finish after owner exit")
+	}
+}
+
 func TestResources_RunningStatusPreservesUpstreamDetails(t *testing.T) {
 	p := newResourceFake()
 	p.startGate = make(chan struct{})
