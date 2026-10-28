@@ -538,6 +538,9 @@ func TestServer_APIMetricsStats(t *testing.T) {
 	if stats.PromptHistogram == nil || stats.GenerationHistogram == nil {
 		t.Fatalf("expected histograms: %+v", stats)
 	}
+	if len(stats.PromptPoints) != 2 {
+		t.Fatalf("model prompt points = %+v", stats.PromptPoints)
+	}
 	if stats.DraftHistogram == nil {
 		t.Fatalf("expected draft histogram: %+v", stats)
 	}
@@ -559,11 +562,27 @@ func TestServer_APIMetricsStats(t *testing.T) {
 	if stats.PromptHistogram == nil || stats.PromptHistogram.Min != 10 || stats.PromptHistogram.Max != 50 {
 		t.Fatalf("session prompt histogram = %+v", stats.PromptHistogram)
 	}
+	if len(stats.PromptPoints) != 2 || stats.PromptPoints[0].Model == stats.PromptPoints[1].Model {
+		t.Fatalf("session prompt points = %+v", stats.PromptPoints)
+	}
 	if stats.GenerationHistogram == nil || stats.GenerationHistogram.Min != 20 || stats.GenerationHistogram.Max != 20 {
 		t.Fatalf("session generation histogram = %+v", stats.GenerationHistogram)
 	}
 	if stats.DraftHistogram == nil || stats.DraftHistogram.Min != 50 || stats.DraftHistogram.Max != 50 {
 		t.Fatalf("session draft histogram = %+v", stats.DraftHistogram)
+	}
+
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/metrics/stats?model=m2&session_id=shared", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("combined stats status = %d body=%q", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
+		t.Fatalf("unmarshal combined stats: %v", err)
+	}
+	want := store.PromptPoint{Model: "m2", InputTokens: 5, CachedTokens: 0, PromptPerSecond: 50}
+	if len(stats.PromptPoints) != 1 || stats.PromptPoints[0] != want {
+		t.Fatalf("combined prompt points = %+v, want %+v", stats.PromptPoints, want)
 	}
 
 	w = httptest.NewRecorder()
@@ -573,6 +592,9 @@ func TestServer_APIMetricsStats(t *testing.T) {
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
 		t.Fatalf("unmarshal unknown session stats: %v", err)
+	}
+	if stats.PromptPoints == nil || len(stats.PromptPoints) != 0 || !strings.Contains(w.Body.String(), `"prompt_points":[]`) {
+		t.Fatalf("empty prompt points in response: %s", w.Body.String())
 	}
 	if stats.TotalRequests != 0 || stats.TotalInputTokens != 0 || stats.TotalOutputTokens != 0 || stats.TotalCacheTokens != 0 || stats.PromptHistogram != nil || stats.GenerationHistogram != nil || stats.DraftHistogram != nil {
 		t.Fatalf("unknown session stats = %+v, want empty", stats)

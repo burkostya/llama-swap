@@ -204,11 +204,19 @@ export interface HistogramData {
   p50: number;
 }
 
+export interface PromptPoint {
+  model: string;
+  input_tokens: number;
+  cache_tokens: number;
+  prompt_per_second: number;
+}
+
 export interface ActivityStatsData {
   total_requests: number;
   total_input_tokens: number;
   total_output_tokens: number;
   total_cache_tokens: number;
+  prompt_points: PromptPoint[];
   prompt_histogram: HistogramData | null;
   gen_histogram: HistogramData | null;
   draft_histogram: HistogramData | null;

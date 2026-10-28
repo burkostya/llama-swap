@@ -131,12 +131,21 @@ type ActivityStatsQuery struct {
 	SessionID string
 }
 
-// ActivityStats are aggregate totals and speed histograms over activity rows.
+// PromptPoint describes one request's prompt size and prefill speed.
+type PromptPoint struct {
+	Model           string  `json:"model"`
+	InputTokens     int     `json:"input_tokens"`
+	CachedTokens    int     `json:"cache_tokens"`
+	PromptPerSecond float64 `json:"prompt_per_second"`
+}
+
+// ActivityStats are aggregate totals, prompt points, and speed histograms over activity rows.
 type ActivityStats struct {
 	TotalRequests       int            `json:"total_requests"`
 	TotalInputTokens    int            `json:"total_input_tokens"`
 	TotalOutputTokens   int            `json:"total_output_tokens"`
 	TotalCacheTokens    int            `json:"total_cache_tokens"`
+	PromptPoints        []PromptPoint  `json:"prompt_points"`
 	PromptHistogram     *HistogramData `json:"prompt_histogram"`
 	GenerationHistogram *HistogramData `json:"gen_histogram"`
 	DraftHistogram      *HistogramData `json:"draft_histogram"`

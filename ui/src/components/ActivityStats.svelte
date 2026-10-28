@@ -1,6 +1,9 @@
 <script lang="ts">
   import type { ActivityStatsData } from "../lib/types";
   import { persistentStore } from "../stores/persistent";
+  import { preparePromptPoints } from "../lib/promptScatter";
+  import HeaderLabel from "./activity-table/HeaderLabel.svelte";
+  import PromptScatter from "./PromptScatter.svelte";
   import TokenHistogram from "./TokenHistogram.svelte";
   import { ChevronDown, X } from "@lucide/svelte";
   import * as Card from "$lib/components/ui/card/index.js";
@@ -14,6 +17,7 @@
 
   const nf = new Intl.NumberFormat();
   const histogramCollapsed = persistentStore<boolean>("activity-histogram-collapsed", false);
+  let promptPoints = $derived(preparePromptPoints(stats?.prompt_points));
 </script>
 
 <Card.Root class="relative p-3">
@@ -22,7 +26,7 @@
     size="icon-xs"
     class="text-muted-foreground absolute right-2 top-2 rounded-full"
     onclick={() => ($histogramCollapsed = !$histogramCollapsed)}
-    title={$histogramCollapsed ? "Show histograms" : "Hide histograms"}
+    title={$histogramCollapsed ? "Show charts" : "Hide charts"}
   >
     {#if $histogramCollapsed}
       <ChevronDown />
@@ -33,13 +37,14 @@
   {#if !$histogramCollapsed}
     <div class="mb-3 grid grid-cols-1 gap-6 lg:grid-cols-3">
       <div class="w-full min-w-0">
-        <div class="text-muted-foreground mb-1 text-sm font-medium">Prompt Processing</div>
-        {#if stats?.prompt_histogram}
-          <TokenHistogram
-            data={stats.prompt_histogram}
-            unit="prompt tokens/sec"
-            colorClass="text-amber-500 dark:text-amber-400"
+        <div class="text-muted-foreground mb-1 text-sm font-medium">
+          <HeaderLabel
+            label="Prompt Processing"
+            tooltip="Prefill speed by prompt size. Token counts match the Prompt column; cache accounting depends on the backend."
           />
+        </div>
+        {#if promptPoints.length > 0}
+          <PromptScatter points={promptPoints} />
         {:else}
           <div class="text-muted-foreground py-6 text-center text-sm">No prompt speed data yet</div>
         {/if}
