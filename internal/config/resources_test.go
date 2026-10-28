@@ -3,9 +3,14 @@
 package config
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/jsonschema-go/jsonschema"
+	"gopkg.in/yaml.v3"
 )
 
 const resourceConfigFixture = `
@@ -49,6 +54,48 @@ func TestResources_ConfigDefaultsAndArgv(t *testing.T) {
 	}
 	if len(args) != 3 || args[2] != "a device with spaces" {
 		t.Fatalf("resource value changed argv boundaries: %#v", args)
+	}
+}
+
+func TestResources_CapacitySettingsAndSchema(t *testing.T) {
+	input := strings.Replace(resourceConfigFixture, "      resources:\n", "      capacity:\n        pools: {ram: 10}\n      resources:\n", 1)
+	input = strings.Replace(input, "    activation: demand\n", "    capacities: {ram: 2}\n    activation: demand\n", 1)
+	c, err := LoadConfigFromReader(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Routing.Router.Use != "resources" || c.Routing.Router.Settings.Capacity.Pools["ram"] != 10 || c.Routing.Router.Settings.Resources == nil {
+		t.Fatalf("resource and capacity settings not retained: %+v", c.Routing.Router)
+	}
+	data, err := os.ReadFile("../../config-schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema jsonschema.Schema
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := schema.Resolve(&jsonschema.ResolveOptions{BaseURI: "https://github.com/mostlygeek/llama-swap/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var instance any
+	if err := yaml.Unmarshal([]byte(input), &instance); err != nil {
+		t.Fatal(err)
+	}
+	data, err = json.Marshal(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &instance); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolved.Validate(instance); err != nil {
+		t.Fatalf("schema rejected resource config with capacity settings: %v", err)
+	}
+	legacy := strings.Replace(input, "    use: resources\n", "", 1) + "\ngroups: {}\n"
+	if _, err := LoadConfigFromReader(strings.NewReader(legacy)); err == nil || !strings.Contains(err.Error(), "legacy top-level") {
+		t.Fatalf("legacy groups with resource settings: %v", err)
 	}
 }
 

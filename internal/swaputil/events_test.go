@@ -7,7 +7,7 @@ func TestEvents_ResourceStateDoesNotCollideWithUpstream(t *testing.T) {
 	for _, id := range []uint32{
 		ProcessStateChangeEventID, ConfigFileChangedEventID, ActivityLogEventID,
 		ModelPreloadedEventID, InFlightRequestsEventID, ProfileChangedEventID,
-		ModelCapabilitiesChangedEventID, ProcessLoadingEventID,
+		ModelCapabilitiesChangedEventID, ProcessLoadingEventID, InferencePausedEventID,
 	} {
 		if resourceID == id {
 			t.Fatalf("resource state event collides with upstream event %#x", id)

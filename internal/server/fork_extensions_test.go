@@ -35,7 +35,7 @@ func TestServer_ExtensionControlAuthenticationAndPlainConstruction(t *testing.T)
 			if enabled {
 				opts = append(opts, WithExtensionRegistry(extension.NewRegistry()))
 			}
-			srv, err := New(cfg, logs, nil, st, BuildInfo{}, nil, nil, opts...)
+			srv, err := New(cfg, logs, nil, st, BuildInfo{}, nil, nil, nil, nil, opts...)
 			if err != nil {
 				t.Fatal(err)
 			}

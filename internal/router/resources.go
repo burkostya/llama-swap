@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/mostlygeek/llama-swap/internal/config"
@@ -30,6 +31,15 @@ type Resources struct {
 	closing, frozen  bool
 	storageError     string
 	runtimeCommand   resourceRuntimeCommand
+	startGate        atomic.Pointer[func() error]
+	pauseDrains      []resourcePauseDrain
+}
+
+// resourcePauseDrain tracks the owner generations present when pause began.
+// It is owned by the coordinator; callers wait outside the coordinator loop.
+type resourcePauseDrain struct {
+	owners map[string]uint64
+	done   chan struct{}
 }
 
 type resourceBackend struct {
@@ -151,6 +161,7 @@ func (r *Resources) run() {
 			r.tick(r.now())
 		}
 		r.reconcile()
+		r.completePauseDrains()
 		if r.closing && len(r.ledger.Owners) == 0 {
 			for _, b := range r.backends {
 				if b.cancel != nil {
@@ -163,6 +174,41 @@ func (r *Resources) run() {
 			return
 		}
 	}
+}
+
+// SetStartGate installs the server's pause check for every resource admission.
+func (r *Resources) SetStartGate(gate func() error) {
+	if gate == nil {
+		r.startGate.Store(nil)
+		return
+	}
+	r.startGate.Store(&gate)
+}
+
+func (r *Resources) startGateError() error {
+	if gate := r.startGate.Load(); gate != nil {
+		return (*gate)()
+	}
+	return nil
+}
+
+func (r *Resources) completePauseDrains() {
+	remaining := r.pauseDrains[:0]
+	for _, drain := range r.pauseDrains {
+		pending := false
+		for id, generation := range drain.owners {
+			if owner, ok := r.ledger.Owners[id]; ok && owner.Generation == generation {
+				pending = true
+				break
+			}
+		}
+		if pending {
+			remaining = append(remaining, drain)
+		} else {
+			close(drain.done)
+		}
+	}
+	r.pauseDrains = remaining
 }
 
 func (r *Resources) persist() bool {
@@ -219,6 +265,10 @@ func (r *Resources) failWaiters(b *resourceBackend, message string) {
 
 func (r *Resources) grantWaiters(b *resourceBackend) {
 	if b.state != "ready" {
+		return
+	}
+	if err := r.startGateError(); err != nil {
+		r.failWaiters(b, err.Error())
 		return
 	}
 	for _, w := range b.waiters {
@@ -290,6 +340,9 @@ func (r *Resources) conflicts(b *resourceBackend) []*resourceBackend {
 }
 
 func (r *Resources) start(b *resourceBackend) {
+	if r.startGateError() != nil {
+		return
+	}
 	b.queued = false
 	b.startDone = false
 	b.stopDone = false
@@ -489,6 +542,12 @@ func (r *Resources) reconcile() {
 		}
 	}
 	r.queue = live
+	if r.startGateError() != nil {
+		for _, b := range r.backends {
+			r.stopIfDrained(b)
+		}
+		return
+	}
 	priorities := r.cfg.Routing.Scheduler.Settings.Fifo.Priority
 	sort.SliceStable(r.queue, func(i, j int) bool { return priorities[r.queue[i]] > priorities[r.queue[j]] })
 	ahead := map[string]bool{}
@@ -575,6 +634,10 @@ func (r *Resources) Demand(d ResourceDemand) (ResourceBackendStatus, int, error)
 		}
 		if strings.TrimSpace(d.Source) == "" || len(d.Source) > 256 || (b.cfg.Activation != "demand" && b.cfg.Activation != "both") {
 			reply <- result{code: 400, err: fmt.Errorf("nonempty source and demand-enabled backend are required")}
+			return
+		}
+		if err := r.startGateError(); err != nil {
+			reply <- result{code: http.StatusServiceUnavailable, err: err}
 			return
 		}
 		if r.closing || r.frozen {
@@ -764,6 +827,13 @@ func (r *Resources) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			}
 			return
 		}
+		if err := r.startGateError(); err != nil {
+			select {
+			case waiter.reply <- resourceGrant{status: http.StatusServiceUnavailable, message: err.Error()}:
+			case <-req.Context().Done():
+			}
+			return
+		}
 		if r.closing || r.frozen || (b.cfg.Activation == "demand" && b.state != "ready") {
 			select {
 			case waiter.reply <- resourceGrant{status: 503, message: "backend unavailable; report demand to activate it"}:
@@ -819,6 +889,32 @@ func (r *Resources) Unload(_ time.Duration, ids ...string) {
 			}
 		}
 	})
+}
+
+// DrainForPause rejects queued work and waits for confirmed owner release.
+// The coordinator remains available for status and generation-checked stop.
+func (r *Resources) DrainForPause() {
+	done := make(chan struct{})
+	if !r.submit(func() {
+		owners := make(map[string]uint64, len(r.ledger.Owners))
+		for id, owner := range r.ledger.Owners {
+			owners[id] = owner.Generation
+		}
+		for _, b := range r.backends {
+			b.sources = map[string]time.Time{}
+			b.queued = false
+			r.failWaiters(b, swaputil.ErrInferencePaused.Error())
+			r.beginDrain(b, "inference paused")
+		}
+		r.queue = nil
+		r.pauseDrains = append(r.pauseDrains, resourcePauseDrain{owners: owners, done: done})
+	}) {
+		return
+	}
+	select {
+	case <-done:
+	case <-r.done:
+	}
 }
 
 func (r *Resources) Shutdown(_ time.Duration) error {

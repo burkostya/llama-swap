@@ -62,13 +62,18 @@ func (s *Server) serveLocal(w http.ResponseWriter, r *http.Request) {
 
 // handleAPIPause pauses inference and then unloads every local model. Pausing
 // first means the router's start gate refuses every swap the unload does not
-// cancel, so no model can start once it returns. Requests already in progress
-// are stopped with their model. It returns once every model has stopped.
+// cancel, so no model can start once it returns. The resources router drains
+// in-flight requests before stopping workers. It returns once every model has
+// stopped and resource ownership has been released.
 func (s *Server) handleAPIPause(w http.ResponseWriter, r *http.Request) {
 	s.pause.transition.Lock()
 	defer s.pause.transition.Unlock()
 	s.setPaused(true)
-	s.local.Unload(0)
+	if drainer, ok := s.local.(interface{ DrainForPause() }); ok {
+		drainer.DrainForPause()
+	} else {
+		s.local.Unload(0)
+	}
 	writePauseState(w, true)
 }
 

@@ -19,6 +19,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/process"
+	"github.com/mostlygeek/llama-swap/internal/swaputil"
 )
 
 type resourceDockerFake struct {
@@ -240,6 +241,35 @@ func TestResources_DockerOutlivesCLIAndBlocksCompetitor(t *testing.T) {
 	d.stopped = true
 	d.mu.Unlock()
 	resourceAwait(t, r, "b", "ready")
+}
+
+func TestResources_DockerPauseWaitsForContainer(t *testing.T) {
+	r, f, d := dockerTestRouter(t, nil)
+	resourceDemand(t, r, "a", "main", true)
+	resourceAwait(t, r, "a", "ready")
+	awaitDockerID(t, r)
+	r.SetStartGate(func() error { return swaputil.ErrInferencePaused })
+	drained := make(chan struct{})
+	go func() { r.DrainForPause(); close(drained) }()
+	resourceAwait(t, r, "a", "draining")
+	_ = f.latest("a").ForceResourceStop()
+	resourceAwait(t, r, "a", "blocked")
+	select {
+	case <-drained:
+		t.Fatal("pause completed while container was running")
+	default:
+	}
+	if r.Snapshot().Pools["gpu0"].Owner != "a" {
+		t.Fatal("pause released resource before container exit")
+	}
+	d.mu.Lock()
+	d.stopped = true
+	d.mu.Unlock()
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pause did not complete after container exit")
+	}
 }
 
 func TestResources_DockerDaemonAndStopErrorsStayOwned(t *testing.T) {
