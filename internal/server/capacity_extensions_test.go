@@ -77,7 +77,7 @@ models:
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := sqlite.New("")
+	store, err := sqlite.New("", "")
 	if err != nil {
 		t.Fatal(err)
 	}

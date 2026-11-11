@@ -53,7 +53,7 @@ type ActivityLogEntry struct {
 	HasCapture bool              `json:"has_capture"`
 	ErrorMsg   string            `json:"error_msg,omitempty"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
-	SessionID       string            `json:"session_id"`
+	SessionID  string            `json:"session_id"`
 }
 
 // ActivityFilter narrows which activity rows a query matches. The zero value

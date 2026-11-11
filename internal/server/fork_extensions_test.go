@@ -25,7 +25,7 @@ func TestServer_ExtensionControlAuthenticationAndPlainConstruction(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			st, err := sqlite.New("")
+			st, err := sqlite.New("", "")
 			if err != nil {
 				t.Fatal(err)
 			}

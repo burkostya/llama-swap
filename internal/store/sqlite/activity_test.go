@@ -2,10 +2,12 @@ package sqlite
 
 import (
 	"context"
-	"io/fs"
+	"database/sql"
 	"math"
+	"path/filepath"
 	"reflect"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/mostlygeek/llama-swap/internal/store"
@@ -64,32 +66,40 @@ func TestStore_ActivityTaskRouteRoundTrip(t *testing.T) {
 // TestStore_ActivityTaskBackfill checks migration 00004 labels rows recorded
 // before the task column existed, and leaves reasoning tokens unknown.
 func TestStore_ActivityTaskBackfill(t *testing.T) {
-	st, err := New("", "")
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "activity.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := fstest.MapFS{}
+	for _, name := range []string{"00001_create_activity.sql", "00002_add_activity_source.sql", "00003_create_cache.sql"} {
+		data, err := migrationFS.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[name] = &fstest.MapFile{Data: data}
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/v1/chat/completions", "/v1/embeddings", "/v1/audio/speech", "/upstream/m/props"} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO activity (ts_created, model_id, req_path) VALUES (1, 'm', ?)`, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := New(path, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	ctx := context.Background()
-
-	migrations, err := fs.Sub(migrationFS, "migrations")
-	if err != nil {
-		t.Fatal(err)
-	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, st.db, migrations)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := provider.DownTo(ctx, 3); err != nil {
-		t.Fatalf("down to 3: %v", err)
-	}
-	for _, path := range []string{"/v1/chat/completions", "/v1/embeddings", "/v1/audio/speech", "/upstream/m/props"} {
-		if _, err := st.db.ExecContext(ctx, `INSERT INTO activity (ts_created, model_id, req_path) VALUES (1, 'm', ?)`, path); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := provider.Up(ctx); err != nil {
-		t.Fatalf("up: %v", err)
-	}
 
 	page, err := st.Activity().List(ctx, store.ActivityQuery{Limit: 10, Page: 1, Sort: "id", Order: "asc"})
 	if err != nil {
@@ -216,7 +226,7 @@ func TestActivity_InfinitePromptSpeed(t *testing.T) {
 
 func TestActivity_GenerationAndDraftPoints(t *testing.T) {
 	ctx := context.Background()
-	st, err := New("")
+	st, err := New("", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +303,7 @@ func TestActivity_GenerationAndDraftPoints(t *testing.T) {
 
 func TestActivity_InfiniteGenerationSpeed(t *testing.T) {
 	ctx := context.Background()
-	st, err := New("")
+	st, err := New("", "")
 	if err != nil {
 		t.Fatal(err)
 	}

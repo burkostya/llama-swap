@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/mostlygeek/llama-swap/internal/hint"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/process"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
@@ -39,6 +40,7 @@ type resourceFake struct {
 	serveOnce     sync.Once
 	logger        *logmon.Monitor
 	reported      atomic.Pointer[process.Status]
+	observedHint  chan hint.Request
 }
 
 func newResourceFake() *resourceFake {
@@ -78,6 +80,11 @@ func (p *resourceFake) Status() process.Status {
 	return process.Status{State: p.State()}
 }
 func (p *resourceFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if p.observedHint != nil {
+		if h := hint.From(r.Context()); h != nil {
+			p.observedHint <- *h
+		}
+	}
 	p.serveOnce.Do(func() { close(p.serveStarted) })
 	if p.serveGate != nil {
 		<-p.serveGate
@@ -153,6 +160,33 @@ const resourceModels = `  a: {cmd: a, proxy: http://127.0.0.1:5800, activation: 
   b: {cmd: b, proxy: http://127.0.0.1:5801, activation: demand, resources: [gpu0, gpu1], checkEndpoint: none}
   c: {cmd: c, proxy: http://127.0.0.1:5802, activation: demand, resources: [gpu1], checkEndpoint: none}
 `
+
+func TestResources_RequestCarriesLocalUpstreamHint(t *testing.T) {
+	p := newResourceFake()
+	p.observedHint = make(chan hint.Request, 1)
+	p.reported.Store(&process.Status{State: process.StateReady, Upstream: hint.LlamaServer})
+	f := &resourceFactory{models: map[string][]*resourceFake{}, newProcess: func(string) *resourceFake { return p }}
+	r := resourceTestRouter(t, resourceTestConfig(t, resourceModels), f)
+	resourceDemand(t, r, "a", "main", true)
+	resourceAwait(t, r, "a", "ready")
+	ctx, h := hint.New(context.Background())
+	h.Route, h.PeerID = hint.RoutePeer, "old-peer"
+	ctx = swaputil.SetContext(ctx, swaputil.ReqContextData{Model: "a", ModelID: "a"})
+	req := httptest.NewRequest(http.MethodPost, "/", nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	select {
+	case got := <-p.observedHint:
+		if got.Route != hint.RouteLocal || got.PeerID != "" || got.Upstream != hint.LlamaServer {
+			t.Fatalf("hint = %+v", got)
+		}
+	default:
+		t.Fatal("process did not observe request hint")
+	}
+}
 
 func resourceTestRouter(t *testing.T, c config.Config, f *resourceFactory) *Resources {
 	t.Helper()

@@ -11,7 +11,7 @@ export function normalizeChartType(value: unknown): ChartType {
 export const activityChartSettings = {
   prompt: {
     title: "Prompt Processing",
-    tooltip: "Prefill speed by prompt size. Token counts match the Prompt column; cache accounting depends on the backend.",
+    tooltip: "Prompt size includes cached tokens. Prefill speed measures processing of uncached tokens.",
     yLabel: "Prefill (t/s)",
     unit: "prompt tokens/sec",
     color: "rgba(245, 158, 11, 0.6)",

@@ -101,6 +101,25 @@ models:
 	return s, r, f
 }
 
+func TestProxy_ResourcesRecordsLocalActivity(t *testing.T) {
+	s, _, _ := resourceAPIServer(t)
+	w := resourceAPIRequest(s, "PUT", "/api/resources/demand", `{"model":"worker","source":"main","hasWork":true}`, "secret")
+	if w.Code != http.StatusOK {
+		t.Fatalf("activate worker: %d %s", w.Code, w.Body.String())
+	}
+	req := chatRequest("worker")
+	req.Header.Set("Authorization", "Bearer secret")
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("request: %d %s", w.Code, w.Body.String())
+	}
+	entries := metricsEntries(t, s.metrics)
+	if len(entries) != 1 || entries[0].Model != "worker" || entries[0].Task != "chat" || entries[0].Route != "local" || entries[0].PeerID != "" {
+		t.Fatalf("activity: %+v", entries)
+	}
+}
+
 func TestProxy_ResourcesPauseWaitsAndRejectsDemand(t *testing.T) {
 	s, r, f := resourceAPIServer(t)
 	stopGate := make(chan struct{})

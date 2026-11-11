@@ -470,7 +470,7 @@ func TestStore_NewFilePersistsActivity(t *testing.T) {
 
 func TestStore_ActivitySessionIDDefaultsEmptyForLegacyRows(t *testing.T) {
 	ctx := context.Background()
-	st, err := New("")
+	st, err := New("", "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

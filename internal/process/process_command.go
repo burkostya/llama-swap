@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -145,7 +146,9 @@ type ProcessCommand struct {
 	// detected is what capcompat.Detect found when the process last became
 	// ready. Cleared at the start of each doStart; nil until detection
 	// succeeds.
-	detected atomic.Pointer[capcompat.Info]
+	detected            atomic.Pointer[capcompat.Info]
+	detectionMu         sync.Mutex
+	detectionGeneration uint64
 }
 
 var _ Process = (*ProcessCommand)(nil)
@@ -487,7 +490,11 @@ func (p *ProcessCommand) run() {
 }
 
 func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout time.Duration) startResult {
+	p.detectionMu.Lock()
+	p.detectionGeneration++
+	generation := p.detectionGeneration
 	p.detected.Store(nil)
+	p.detectionMu.Unlock()
 	if p.config.Proxy == "" {
 		return startResult{err: fmt.Errorf("upstream proxy missing")}
 	}
@@ -641,7 +648,7 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		// Without a health check the upstream may not be listening yet, so
 		// detection runs alongside serving, with retries, for as long as the
 		// command runs.
-		go p.detectUpstream(cmdCtx, true)
+		go p.detectUpstream(cmdCtx, true, generation)
 		runtime, wrapped, readyErr := p.extensionsBackendReady(startCtx, proxyURL, handlerFn)
 		if readyErr != nil {
 			result := abort(fmt.Errorf("backend-ready extensions: %w", readyErr))
@@ -720,7 +727,7 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	// The health check has passed, so the upstream is listening: detect it
 	// now, before the process is reported ready, so the first request
 	// already knows which server it is talking to.
-	p.detectUpstream(startCtx, false)
+	p.detectUpstream(startCtx, false, generation)
 	if startCtx.Err() != nil {
 		return abort(ErrStartAborted)
 	}
@@ -979,7 +986,7 @@ const detectTimeout = 2 * time.Second
 //
 // Detection failing is normal (image, speech and transcription servers have
 // no model listing) and never stops the process from serving.
-func (p *ProcessCommand) detectUpstream(ctx context.Context, retry bool) {
+func (p *ProcessCommand) detectUpstream(ctx context.Context, retry bool, generation uint64) {
 	base, err := url.Parse(p.config.Proxy)
 	if err != nil {
 		return
@@ -995,7 +1002,9 @@ func (p *ProcessCommand) detectUpstream(ctx context.Context, retry bool) {
 		info, err = capcompat.Detect(detectCtx, client, name)
 		cancel()
 	}
-	if ctx.Err() != nil {
+	p.detectionMu.Lock()
+	defer p.detectionMu.Unlock()
+	if ctx.Err() != nil || generation != p.detectionGeneration {
 		// The process stopped mid-detection; a result now would describe a
 		// process that is gone.
 		return

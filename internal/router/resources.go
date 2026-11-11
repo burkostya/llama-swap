@@ -869,6 +869,7 @@ func (r *Resources) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			b.lastUse = r.now()
 		}
 	})
+	setLocalHint(req, grant.process)
 	grant.process.ServeHTTP(w, req)
 }
 

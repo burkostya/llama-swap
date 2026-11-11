@@ -138,9 +138,13 @@ ui:
     session_id: [X-Session-ID]
 ```
 
+Prompt, generation, and draft acceptance charts each offer a persistent choice
+of scatter plot or histogram. Scatter plots use prompt size, including cached
+tokens, on the horizontal axis. Prefill speed measures uncached tokens per
+second. Older stored rows retain their original token accounting.
+
 Upgrading from either the earlier fork or upstream preserves Activity rows.
-Migration 4 reconciles their different version-2 and version-3 schemas: it adds
-missing source and session columns with empty defaults and creates the cache
-table if the earlier fork's version 3 skipped it. Existing cache entries are
-preserved. Back up the SQLite database before deployment; schema downgrade
-requires restoring that backup.
+Migrations 4 and 6 reconcile independently published Activity schemas, adding
+missing session, source, and upstream task fields and retaining cache entries.
+Captures use a separate database. Back up the SQLite databases before deployment;
+schema downgrade requires restoring those backups.
