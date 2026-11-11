@@ -10,16 +10,19 @@
     type ChartOptions,
   } from "chart.js";
   import { isDarkMode } from "../stores/theme";
-  import { formatPromptTick, promptLogBounds, promptTooltipLines, type PromptChartPoint } from "../lib/promptScatter";
+  import { formatPromptTick, promptLogBounds } from "../lib/promptScatter";
+
+  import { activityChartSettings, type ActivityChartPoint, type ActivityMetric } from "../lib/activityScatter";
 
   Chart.register(ScatterController, PointElement, LinearScale, LogarithmicScale, Tooltip);
 
-  let { points }: { points: PromptChartPoint[] } = $props();
+  let { points, metric }: { points: ActivityChartPoint[]; metric: ActivityMetric } = $props();
+  let settings = $derived(activityChartSettings[metric]);
   let canvas: HTMLCanvasElement;
-  let chart: Chart<"scatter", PromptChartPoint[]>;
+  let chart: Chart<"scatter", ActivityChartPoint[]>;
   const nf = new Intl.NumberFormat();
 
-  function buildOptions(dark: boolean, data: PromptChartPoint[]): ChartOptions<"scatter"> {
+  function buildOptions(dark: boolean, data: ActivityChartPoint[]): ChartOptions<"scatter"> {
     const tick = dark ? "#9ca3af" : "#6b7280";
     const grid = dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)";
     const tooltipText = dark ? "#f3f4f6" : "#111827";
@@ -42,8 +45,8 @@
           // unbounded tooltip with a line for every coincident point.
           filter: (_item, index) => index === 0,
           callbacks: {
-            title: (items) => (items[0]?.raw as PromptChartPoint | undefined)?.model ?? "",
-            label: (item) => promptTooltipLines(item.raw as PromptChartPoint),
+            title: (items) => (items[0]?.raw as ActivityChartPoint | undefined)?.model ?? "",
+            label: (item) => (item.raw as ActivityChartPoint).tooltipLines,
           },
         },
       },
@@ -60,9 +63,10 @@
           type: "linear",
           beginAtZero: true,
           grace: "5%",
+          suggestedMax: metric === "draft" ? 100 : undefined,
           ticks: { color: tick, font: { size: 10 }, maxTicksLimit: 5 },
           grid: { color: grid },
-          title: { display: true, text: "Prefill (t/s)", color: tick, font: { size: 10 } },
+          title: { display: true, text: settings.yLabel, color: tick, font: { size: 10 } },
         },
       },
     };
@@ -74,7 +78,7 @@
       data: {
         datasets: [{
           data: [...points],
-          backgroundColor: "rgba(245, 158, 11, 0.6)",
+          backgroundColor: settings.color,
           pointRadius: 3,
           pointHoverRadius: 5,
           pointHitRadius: 5,
@@ -91,6 +95,7 @@
     const data = points;
     const dark = $isDarkMode;
     chart.data.datasets[0].data = [...data];
+    chart.data.datasets[0].backgroundColor = settings.color;
     chart.options = buildOptions(dark, data);
     chart.update("none");
   });
@@ -99,7 +104,7 @@
 <div class="mt-2 h-[180px] w-full">
   <canvas
     bind:this={canvas}
-    aria-label="Prefill speed by prompt token count, {nf.format(points.length)} requests plotted"
-  >Prefill speed by prompt token count, {nf.format(points.length)} requests plotted.</canvas>
+    aria-label="{settings.title} by prompt token count, {nf.format(points.length)} requests plotted"
+  >{settings.title} by prompt token count, {nf.format(points.length)} requests plotted.</canvas>
 </div>
 <div class="text-muted-foreground mt-1 text-xs">{nf.format(points.length)} requests plotted</div>

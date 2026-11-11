@@ -162,16 +162,33 @@ type PromptPoint struct {
 	PromptPerSecond float64 `json:"prompt_per_second"`
 }
 
-// ActivityStats are aggregate totals, prompt points, and speed histograms over activity rows.
+// GenerationPoint describes one request's prompt size and generation speed.
+type GenerationPoint struct {
+	Model           string  `json:"model"`
+	InputTokens     int     `json:"input_tokens"`
+	TokensPerSecond float64 `json:"tokens_per_second"`
+}
+
+// DraftPoint describes one request's prompt size and draft acceptance counts.
+type DraftPoint struct {
+	Model          string `json:"model"`
+	InputTokens    int    `json:"input_tokens"`
+	DraftTokens    int    `json:"draft_tokens"`
+	DraftAccTokens int    `json:"draft_acc_tokens"`
+}
+
+// ActivityStats are aggregate totals, request points, and histograms over activity rows.
 type ActivityStats struct {
-	TotalRequests       int            `json:"total_requests"`
-	TotalInputTokens    int            `json:"total_input_tokens"`
-	TotalOutputTokens   int            `json:"total_output_tokens"`
-	TotalCacheTokens    int            `json:"total_cache_tokens"`
-	PromptPoints        []PromptPoint  `json:"prompt_points"`
-	PromptHistogram     *HistogramData `json:"prompt_histogram"`
-	GenerationHistogram *HistogramData `json:"gen_histogram"`
-	DraftHistogram      *HistogramData `json:"draft_histogram"`
+	TotalRequests       int               `json:"total_requests"`
+	TotalInputTokens    int               `json:"total_input_tokens"`
+	TotalOutputTokens   int               `json:"total_output_tokens"`
+	TotalCacheTokens    int               `json:"total_cache_tokens"`
+	PromptPoints        []PromptPoint     `json:"prompt_points"`
+	GenerationPoints    []GenerationPoint `json:"gen_points"`
+	DraftPoints         []DraftPoint      `json:"draft_points"`
+	PromptHistogram     *HistogramData    `json:"prompt_histogram"`
+	GenerationHistogram *HistogramData    `json:"gen_histogram"`
+	DraftHistogram      *HistogramData    `json:"draft_histogram"`
 }
 
 // HistogramData is a binned distribution with percentile summaries.

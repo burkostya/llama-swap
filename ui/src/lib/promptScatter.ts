@@ -26,7 +26,7 @@ export function preparePromptPoints(points: readonly PromptPoint[] | null | unde
   });
 }
 
-export function promptLogBounds(points: readonly PromptChartPoint[]): { min: number; max: number } {
+export function promptLogBounds(points: readonly { x: number }[]): { min: number; max: number } {
   let min = Infinity;
   let max = 0;
   for (const point of points) {

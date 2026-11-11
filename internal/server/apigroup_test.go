@@ -541,6 +541,9 @@ func TestServer_APIMetricsStats(t *testing.T) {
 	if len(stats.PromptPoints) != 2 {
 		t.Fatalf("model prompt points = %+v", stats.PromptPoints)
 	}
+	if len(stats.GenerationPoints) != 2 || len(stats.DraftPoints) != 2 {
+		t.Fatalf("model generation/draft points = %+v / %+v", stats.GenerationPoints, stats.DraftPoints)
+	}
 	if stats.DraftHistogram == nil {
 		t.Fatalf("expected draft histogram: %+v", stats)
 	}
@@ -565,6 +568,12 @@ func TestServer_APIMetricsStats(t *testing.T) {
 	if len(stats.PromptPoints) != 2 || stats.PromptPoints[0].Model == stats.PromptPoints[1].Model {
 		t.Fatalf("session prompt points = %+v", stats.PromptPoints)
 	}
+	if len(stats.GenerationPoints) != 1 || stats.GenerationPoints[0] != (store.GenerationPoint{Model: "m1", InputTokens: 1, TokensPerSecond: 20}) {
+		t.Fatalf("session generation points = %+v", stats.GenerationPoints)
+	}
+	if len(stats.DraftPoints) != 1 || stats.DraftPoints[0] != (store.DraftPoint{Model: "m1", InputTokens: 1, DraftTokens: 20, DraftAccTokens: 10}) {
+		t.Fatalf("session draft points = %+v", stats.DraftPoints)
+	}
 	if stats.GenerationHistogram == nil || stats.GenerationHistogram.Min != 20 || stats.GenerationHistogram.Max != 20 {
 		t.Fatalf("session generation histogram = %+v", stats.GenerationHistogram)
 	}
@@ -584,6 +593,9 @@ func TestServer_APIMetricsStats(t *testing.T) {
 	if len(stats.PromptPoints) != 1 || stats.PromptPoints[0] != want {
 		t.Fatalf("combined prompt points = %+v, want %+v", stats.PromptPoints, want)
 	}
+	if len(stats.GenerationPoints) != 0 || len(stats.DraftPoints) != 0 {
+		t.Fatalf("combined generation/draft points = %+v / %+v", stats.GenerationPoints, stats.DraftPoints)
+	}
 
 	w = httptest.NewRecorder()
 	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/metrics/stats?session_id=missing", nil))
@@ -595,6 +607,9 @@ func TestServer_APIMetricsStats(t *testing.T) {
 	}
 	if stats.PromptPoints == nil || len(stats.PromptPoints) != 0 || !strings.Contains(w.Body.String(), `"prompt_points":[]`) {
 		t.Fatalf("empty prompt points in response: %s", w.Body.String())
+	}
+	if stats.GenerationPoints == nil || stats.DraftPoints == nil || !strings.Contains(w.Body.String(), `"gen_points":[]`) || !strings.Contains(w.Body.String(), `"draft_points":[]`) {
+		t.Fatalf("empty generation/draft points in response: %s", w.Body.String())
 	}
 	if stats.TotalRequests != 0 || stats.TotalInputTokens != 0 || stats.TotalOutputTokens != 0 || stats.TotalCacheTokens != 0 || stats.PromptHistogram != nil || stats.GenerationHistogram != nil || stats.DraftHistogram != nil {
 		t.Fatalf("unknown session stats = %+v, want empty", stats)

@@ -213,3 +213,101 @@ func TestActivity_InfinitePromptSpeed(t *testing.T) {
 		t.Fatalf("infinite speed included in statistics: %+v", stats)
 	}
 }
+
+func TestActivity_GenerationAndDraftPoints(t *testing.T) {
+	ctx := context.Background()
+	st, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	entries := []store.ActivityLogEntry{
+		{Model: "m1", SessionID: "shared", Tokens: store.TokenMetrics{InputTokens: 10, TokensPerSecond: 20, DraftTokens: 10, DraftAccTokens: 0}},
+		{Model: "m2", SessionID: "shared", Tokens: store.TokenMetrics{InputTokens: 100, TokensPerSecond: 30, DraftTokens: 10, DraftAccTokens: 5}},
+		{Model: "m1", SessionID: "other", Tokens: store.TokenMetrics{InputTokens: 1000, TokensPerSecond: 40, DraftTokens: 10, DraftAccTokens: 12}},
+	}
+	entries = append(entries, entries[0]) // Coincident requests must not be deduplicated.
+	for _, tokens := range []store.TokenMetrics{
+		{InputTokens: 0, TokensPerSecond: 50, DraftTokens: 10, DraftAccTokens: 5},
+		{InputTokens: -1, TokensPerSecond: 50, DraftTokens: 10, DraftAccTokens: 5},
+		{InputTokens: 10, TokensPerSecond: 0, DraftTokens: 0},
+		{InputTokens: 10, TokensPerSecond: -1, DraftTokens: -1},
+		{InputTokens: 10, DraftTokens: 10, DraftAccTokens: -1},
+	} {
+		entries = append(entries, store.ActivityLogEntry{Model: "m1", SessionID: "shared", Tokens: tokens})
+	}
+	for _, entry := range entries {
+		if _, err := st.Activity().Insert(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tt := range []struct {
+		name    string
+		query   store.ActivityStatsQuery
+		indexes []int
+	}{
+		{"all", store.ActivityStatsQuery{}, []int{0, 1, 2, 3}},
+		{"model", store.ActivityStatsQuery{Model: "m1"}, []int{0, 2, 3}},
+		{"session", store.ActivityStatsQuery{SessionID: "shared"}, []int{0, 1, 3}},
+		{"both", store.ActivityStatsQuery{Model: "m2", SessionID: "shared"}, []int{1}},
+		{"empty", store.ActivityStatsQuery{SessionID: "missing"}, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stats, err := st.Activity().Stats(ctx, tt.query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stats.GenerationPoints == nil || stats.DraftPoints == nil {
+				t.Fatal("point arrays must not be nil")
+			}
+			wantGen, gotGen := map[store.GenerationPoint]int{}, map[store.GenerationPoint]int{}
+			wantDraft, gotDraft := map[store.DraftPoint]int{}, map[store.DraftPoint]int{}
+			for _, i := range tt.indexes {
+				e := entries[i]
+				wantGen[store.GenerationPoint{Model: e.Model, InputTokens: e.Tokens.InputTokens, TokensPerSecond: e.Tokens.TokensPerSecond}]++
+				wantDraft[store.DraftPoint{Model: e.Model, InputTokens: e.Tokens.InputTokens, DraftTokens: e.Tokens.DraftTokens, DraftAccTokens: e.Tokens.DraftAccTokens}]++
+			}
+			for _, p := range stats.GenerationPoints {
+				gotGen[p]++
+			}
+			for _, p := range stats.DraftPoints {
+				gotDraft[p]++
+			}
+			if !reflect.DeepEqual(gotGen, wantGen) {
+				t.Fatalf("generation points = %v, want %v", gotGen, wantGen)
+			}
+			if !reflect.DeepEqual(gotDraft, wantDraft) {
+				t.Fatalf("draft points = %v, want %v", gotDraft, wantDraft)
+			}
+			if tt.name == "all" {
+				if stats.GenerationHistogram.Min != 20 || stats.GenerationHistogram.Max != 50 {
+					t.Fatalf("generation histogram changed: %+v", stats.GenerationHistogram)
+				}
+				if stats.DraftHistogram.Min != 0 || stats.DraftHistogram.Max != 120 {
+					t.Fatalf("draft histogram changed: %+v", stats.DraftHistogram)
+				}
+			}
+		})
+	}
+}
+
+func TestActivity_InfiniteGenerationSpeed(t *testing.T) {
+	ctx := context.Background()
+	st, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, speed := range []float64{math.Inf(1), math.Inf(-1)} {
+		if _, err := st.Activity().Insert(ctx, store.ActivityLogEntry{Model: "m", Tokens: store.TokenMetrics{InputTokens: 10, TokensPerSecond: speed}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats, err := st.Activity().Stats(ctx, store.ActivityStatsQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats.GenerationPoints) != 0 {
+		t.Fatalf("infinite speed included: %+v", stats.GenerationPoints)
+	}
+}

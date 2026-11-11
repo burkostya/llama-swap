@@ -163,21 +163,19 @@ func (r *activityRepository) Stats(ctx context.Context, query store.ActivityStat
 		return store.ActivityStats{}, fmt.Errorf("activity stats: %w", err)
 	}
 
-	promptValues, genValues, draftValues, points, err := r.histogramValues(ctx, where, args)
-	if err != nil {
+	if err := r.populateChartData(ctx, where, args, &stats); err != nil {
 		return store.ActivityStats{}, err
 	}
-	stats.PromptHistogram = store.NewHistogram(promptValues)
-	stats.PromptPoints = points
-	stats.GenerationHistogram = store.NewHistogram(genValues)
-	stats.DraftHistogram = store.NewHistogram(draftValues)
 	return stats, nil
 }
 
-// histogramValues reads histogram and prompt point source columns in a single
+// populateChartData reads histogram and request point source columns in a single
 // scan. Draft acceptance requires positive draft and nonnegative accepted counts.
-func (r *activityRepository) histogramValues(ctx context.Context, where string, args []any) (prompt, gen, draft []float64, points []store.PromptPoint, err error) {
-	points = make([]store.PromptPoint, 0)
+func (r *activityRepository) populateChartData(ctx context.Context, where string, args []any, stats *store.ActivityStats) error {
+	var prompt, gen, draft []float64
+	stats.PromptPoints = make([]store.PromptPoint, 0)
+	stats.GenerationPoints = make([]store.GenerationPoint, 0)
+	stats.DraftPoints = make([]store.DraftPoint, 0)
 	filter := where
 	condition := `(prompt_per_second > 0 OR tokens_per_second > 0 OR (draft_tokens > 0 AND draft_acc_tokens >= 0))`
 	if filter == "" {
@@ -188,7 +186,7 @@ func (r *activityRepository) histogramValues(ctx context.Context, where string, 
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT model_id, input_tokens, cache_tokens, prompt_per_second, tokens_per_second, draft_tokens, draft_acc_tokens FROM activity`+filter, args...)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("activity histogram: %w", err)
+		return fmt.Errorf("activity histogram: %w", err)
 	}
 	defer rows.Close()
 
@@ -197,22 +195,39 @@ func (r *activityRepository) histogramValues(ctx context.Context, where string, 
 		var genValue float64
 		var draftTokens, draftAccTokens int
 		if err := rows.Scan(&point.Model, &point.InputTokens, &point.CachedTokens, &point.PromptPerSecond, &genValue, &draftTokens, &draftAccTokens); err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("activity histogram row: %w", err)
+			return fmt.Errorf("activity histogram row: %w", err)
 		}
 		if point.PromptPerSecond > 0 && !math.IsInf(point.PromptPerSecond, 0) && !math.IsNaN(point.PromptPerSecond) {
 			prompt = append(prompt, point.PromptPerSecond)
 			if validPromptPoint(point) {
-				points = append(points, point)
+				stats.PromptPoints = append(stats.PromptPoints, point)
 			}
 		}
 		if genValue > 0 {
 			gen = append(gen, genValue)
+			if point.InputTokens > 0 && !math.IsInf(genValue, 0) && !math.IsNaN(genValue) {
+				stats.GenerationPoints = append(stats.GenerationPoints, store.GenerationPoint{
+					Model: point.Model, InputTokens: point.InputTokens, TokensPerSecond: genValue,
+				})
+			}
 		}
 		if draftTokens > 0 && draftAccTokens >= 0 {
 			draft = append(draft, 100*float64(draftAccTokens)/float64(draftTokens))
+			if point.InputTokens > 0 {
+				stats.DraftPoints = append(stats.DraftPoints, store.DraftPoint{
+					Model: point.Model, InputTokens: point.InputTokens,
+					DraftTokens: draftTokens, DraftAccTokens: draftAccTokens,
+				})
+			}
 		}
 	}
-	return prompt, gen, draft, points, rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	stats.PromptHistogram = store.NewHistogram(prompt)
+	stats.GenerationHistogram = store.NewHistogram(gen)
+	stats.DraftHistogram = store.NewHistogram(draft)
+	return nil
 }
 
 func validPromptPoint(point store.PromptPoint) bool {

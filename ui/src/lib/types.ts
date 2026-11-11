@@ -222,9 +222,24 @@ export interface ActivityStatsData {
   total_output_tokens: number;
   total_cache_tokens: number;
   prompt_points: PromptPoint[];
+  gen_points: GenerationPoint[];
+  draft_points: DraftPoint[];
   prompt_histogram: HistogramData | null;
   gen_histogram: HistogramData | null;
   draft_histogram: HistogramData | null;
+}
+
+export interface GenerationPoint {
+  model: string;
+  input_tokens: number;
+  tokens_per_second: number;
+}
+
+export interface DraftPoint {
+  model: string;
+  input_tokens: number;
+  draft_tokens: number;
+  draft_acc_tokens: number;
 }
 
 export interface VersionInfo {
